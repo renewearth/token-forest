@@ -148,7 +148,7 @@ const TROUBLESHOOT: { q: string; a: React.ReactNode }[] = [
         <p>
           날짜 경계는 <strong>KST(한국 표준시)</strong> 기준입니다 — 대시보드의 &lsquo;오늘&rsquo;은
           한국 자정부터 시작합니다. Claude Code 사용량은 트랜스크립트의 실제 시각으로 KST에 정확히
-          담깁니다. 반면 Cursor·OpenAI·Copilot 은 각 서비스가 <strong>일 단위(UTC 리포트일)</strong>로만
+          담깁니다. 반면 Cursor·Copilot 은 각 서비스가 <strong>일 단위(UTC 리포트일)</strong>로만
           제공해, 자정 부근에는 하루가 어긋나 보일 수 있습니다.
         </p>
         <p className="mt-3">

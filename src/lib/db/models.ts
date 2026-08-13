@@ -27,7 +27,7 @@ export interface MemberIdentityDoc {
 export interface UsageDailyDoc {
   _id: Types.ObjectId;
   date: string; // YYYY-MM-DD (UTC)
-  tool: string; // open set: cursor, claude_code, openai, copilot, ...
+  tool: string; // open set: cursor, claude_code, codex, copilot, ...
   model: string; // "" when the source has no model breakdown
   externalId: string;
   machineId: string; // "" for pollers; uploader sends a hostname
@@ -54,7 +54,7 @@ export interface SyncRunDoc {
 }
 
 // ADDITIVE, hour-grained mirror of usage_daily written only by hour-capable
-// sources (claude_code uploader, Cursor, OpenAI). Used solely by the time-of-day
+// sources (claude_code uploader, Cursor, Copilot). Used solely by the time-of-day
 // heatmap / hourly drill-down and NEVER summed with usage_daily.
 export interface UsageHourlyDoc {
   _id: Types.ObjectId;
@@ -152,7 +152,7 @@ const memberSchema = new Schema<MemberDoc>(
   { timestamps: { createdAt: true, updatedAt: false } },
 );
 
-// Maps a tool-native user identifier (cursor email, openai user_id, github
+// Maps a tool-native user identifier (cursor email, github
 // username, ...) to a member. New tools only need new documents.
 const memberIdentitySchema = new Schema<MemberIdentityDoc>({
   memberId: { type: Schema.Types.ObjectId, ref: "Member", required: true },

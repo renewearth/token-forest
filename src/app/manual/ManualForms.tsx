@@ -52,7 +52,7 @@ function SingleRowForm({ members }: { members: Member[]; }) {
           <input
             name="tool"
             list="known-tools"
-            placeholder="cursor, claude_code, openai, copilot…"
+            placeholder="cursor, claude_code, codex, copilot…"
             required
             className={inputCls}
           />

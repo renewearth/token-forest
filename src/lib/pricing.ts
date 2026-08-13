@@ -64,7 +64,7 @@ export function rateFamily(model: string, tool: string): RateFamily {
   if (m.includes("gpt-5.5") || m.includes("gpt-5.6")) return "gpt55";
   if (m.includes("gpt-4o")) return "gpt4o";
   if (m.includes("gpt-") || /^o\d/.test(m)) return "gpt5";
-  return tool === "openai" || tool === "codex" ? "gpt5" : "sonnet";
+  return tool === "codex" ? "gpt5" : "sonnet";
 }
 
 export type WeightableRow = {

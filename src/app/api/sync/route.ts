@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getViewer } from "@/lib/auth";
 import { isSyncing, runSyncExclusive } from "@/scripts/sync";
 
-// Manual "sync now" for the poller connectors (cursor/openai/copilot),
+// Manual "sync now" for the poller connectors (cursor/copilot),
 // triggered by the dashboard button. Claude Code usage and plan limits can
 // NOT be refreshed here — that data lives on member machines and is pushed
 // by their uploader (hourly cron + SessionEnd hook).

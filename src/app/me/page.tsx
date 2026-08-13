@@ -49,7 +49,7 @@ type RecentUsage = { tokens: number; requests: number };
 
 // Tools with dedicated checklist rows / wizard steps; everything else in
 // toolPrefs is a custom tool (manual entry or a future connector).
-const STANDARD_TOOLS = new Set(["cursor", "claude_code", "codex", "openai", "copilot"]);
+const STANDARD_TOOLS = new Set(["cursor", "claude_code", "codex", "copilot"]);
 
 type MemberOnboarding = {
   toolPrefs: string[];
@@ -104,7 +104,7 @@ async function loadOnboarding(
         {
           $match: {
             memberId: oid,
-            tool: { $in: ["cursor", "openai"] },
+            tool: { $in: ["cursor"] },
             date: { $gte: r7.from, $lte: r7.to },
           },
         },
@@ -306,7 +306,6 @@ async function MemberView({
 
   const checks = {
     cursor: data.identityTools.has("cursor"),
-    openai: data.identityTools.has("openai"),
     claude_code: data.claudeCodeConnected,
     codex: data.codexConnected,
     copilot: data.githubConnected,
@@ -327,7 +326,7 @@ async function MemberView({
   // First visit (no onboardedAt) or explicit re-run (?step=…) → wizard.
   const showWizard = !data.onboardedAt || Boolean(step);
   if (showWizard) {
-    const autoClaimed = (["cursor", "openai"] as const)
+    const autoClaimed = (["cursor"] as const)
       .filter((tool) => checks[tool])
       .map((tool) => ({
         tool,
@@ -403,20 +402,6 @@ async function MemberView({
             <p className="text-[var(--text-secondary)]">
               Cursor 사용량은 관리자 API로 자동 수집됩니다. 아직 내 계정에 연결되지 않았다면 아래
               <strong> 미매핑 기록</strong>에서 내 Cursor 이메일을 클레임하세요.
-            </p>
-          )}
-        </ChecklistRow>
-
-        <ChecklistRow done={checks.openai} title="OpenAI">
-          {checks.openai ? (
-            <p className="text-[var(--text-muted)]">
-              {recentLine(data.recentByTool.get("openai")) ??
-                "연결됨 — 관리자 API로 자동 수집됩니다."}
-            </p>
-          ) : (
-            <p className="text-[var(--text-secondary)]">
-              OpenAI 사용량은 관리자 API로 자동 수집됩니다. 아직 내 계정에 연결되지 않았다면 아래
-              <strong> 미매핑 기록</strong>에서 내 OpenAI user id를 클레임하세요.
             </p>
           )}
         </ChecklistRow>
