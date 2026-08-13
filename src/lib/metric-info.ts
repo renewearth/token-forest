@@ -18,13 +18,13 @@ export const METRIC_INFO: Record<string, MetricInfo> = {
   cacheReuse: {
     label: "캐시 재사용 배율",
     meaning: "캐시에 적재한 토큰이 몇 번 재사용됐나 (cacheRead/cacheCreation).",
-    target: "높을수록 캐시 투자 회수가 좋음. 단, 수율과 함께 보세요 — 배율만 오르고 수율이 떨어지면 세션 과장기화 신호.",
+    target: "높을수록 캐시 투자 회수가 좋음 — 새로 적재한 컨텍스트를 여러 번 재사용.",
     trend: "up",
   },
   contextYield: {
     label: "컨텍스트 수율",
-    meaning: "읽은 전체 컨텍스트 대비 생성량 (output/(input+cacheRead)).",
-    target: "높을수록 컨텍스트를 군더더기 없이 씀. 재사용 배율과 견제 쌍.",
+    meaning: "새로 끌어온 컨텍스트 대비 생성량 (output/cacheCreation).",
+    target: "높을수록 좋음 — 새로 읽힌 컨텍스트 1토큰당 더 많은 산출을 뽑아냄.",
     trend: "up",
   },
   cacheSavings: {

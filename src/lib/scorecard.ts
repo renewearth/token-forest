@@ -34,9 +34,11 @@ export function cacheReuseRatio(s: ScoreSums): number | null {
   return ratio(s.cacheRead, s.cacheCreation);
 }
 
-// G4 컨텍스트 수율 — 읽은 전체 컨텍스트 대비 생성량. A1과 견제 쌍.
+// G4 컨텍스트 수율 — 새로 끌어온 컨텍스트(cacheCreation) 1토큰당 산출.
+// 숲 성장 yieldBand(growth.ts)·/guide 정의와 동일 분모. cacheRead(재읽기)를
+// 분모에 넣으면 에이전틱 툴에서 재읽기가 output의 수백 배라 항상 ~0% 됨(폐기).
 export function contextYield(s: ScoreSums): number | null {
-  return ratio(s.output, s.input + s.cacheRead);
+  return ratio(s.output, s.cacheCreation);
 }
 
 // G2 세션 깊이 — 세션당 에이전트 턴 수 (claude_code 합만 넣을 것). 무방향 지표.

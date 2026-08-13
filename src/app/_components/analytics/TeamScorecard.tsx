@@ -145,7 +145,7 @@ export default function TeamScorecard({
           <TrendPair
             title="컨텍스트 수율"
             data={contextYield}
-            domain={[0, 1]}
+            domain={[0, 0.5]}
             tickFormatter={pctTick}
             format={pct}
             yWidth={40}
@@ -162,7 +162,7 @@ export default function TeamScorecard({
           />
         </div>
         <p className="mt-2 text-[11px] text-[var(--text-muted)]">
-          재사용 배율과 수율은 함께 보세요 — 세션을 길게 끌면 배율은 오르지만 수율이 떨어집니다(견제 쌍).
+          컨텍스트 수율은 새로 읽힌 컨텍스트(cacheCreation) 1토큰당 산출량입니다 — 높을수록 끌어온 맥락을 알차게 씁니다.
           프리미엄 모델 비중은 무방향 지표입니다 — 높다고 나쁜 게 아니라 작업 난이도의 반영일 수 있습니다.
         </p>
       </section>

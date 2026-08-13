@@ -20,8 +20,8 @@ const S = (p: Partial<ScoreSums>): ScoreSums => ({
 // 효율 — 0/0 가드 전수
 close(cacheReuseRatio(S({ cacheRead: 90, cacheCreation: 10 })), 9, "재사용 배율 9");
 assert(cacheReuseRatio(S({})) === null, "재사용 0/0 → null");
-close(contextYield(S({ output: 30, input: 20, cacheRead: 80 })), 0.3, "수율 0.3");
-assert(contextYield(S({})) === null, "수율 0/0 → null");
+close(contextYield(S({ output: 30, cacheCreation: 150 })), 0.2, "수율 output/cacheCreation 0.2");
+assert(contextYield(S({ output: 30 })) === null, "수율 cacheCreation 0 → null");
 close(sessionDepth(S({ requests: 40, sessions: 8 })), 5, "세션 깊이 5");
 assert(sessionDepth(S({ requests: 40 })) === null, "sessions 0 → null");
 const anat = requestAnatomy(S({ input: 100, cacheRead: 300, output: 50, requests: 10 }));
