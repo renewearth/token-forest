@@ -754,7 +754,7 @@ export type MatrixRow = { memberId: string; name: string; cells: MatrixCell[] };
 
 // Display order for tools we know about; anything else seen in the data is
 // appended after these, alphabetically.
-const MATRIX_TOOL_ORDER = ["cursor", "claude_code", "codex", "openai", "copilot"];
+const MATRIX_TOOL_ORDER = ["cursor", "claude_code", "codex", "copilot"];
 
 // member × tool grid of last-usage dates — whole history, not range-bound,
 // because the question is "언제 마지막으로 썼나". Registered members with no

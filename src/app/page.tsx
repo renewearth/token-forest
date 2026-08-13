@@ -136,10 +136,10 @@ export default async function OverviewPage({
             <EmptyState message="자동 동기화 기록이 없습니다. 수동 입력만 사용 중일 수 있습니다." />
           )}
           <p className="mt-3 text-[11px] text-[var(--text-muted)]">
-            서버가 매 정시에 자동 동기화하며, 버튼은 Cursor·OpenAI·Copilot만 즉시
+            서버가 매 정시에 자동 동기화하며, 버튼은 Cursor·Copilot만 즉시
             갱신합니다. Claude Code 사용량·한도는 각 구성원 기기에서 매 정시 자동
             업로드됩니다.
-            Claude Code 사용량은 KST 기준으로 정확히 집계되고, 그 외 도구(Cursor·OpenAI·Copilot)는
+            Claude Code 사용량은 KST 기준으로 정확히 집계되고, 그 외 도구(Cursor·Copilot)는
             소스의 리포트일(UTC)을 따라 자정 부근 하루가 어긋날 수 있습니다. 새로 설치한 기기의 Claude
             Code 과거 이력은 최대 약 30일까지만 소급됩니다.
           </p>

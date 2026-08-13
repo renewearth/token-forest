@@ -38,20 +38,19 @@ const stepTitle = "mb-3 text-base font-semibold text-[var(--text-primary)]";
 
 type StepId = "tools" | "auto" | "claude" | "copilot" | "custom" | "done";
 
-const STANDARD_TOOLS = new Set(["cursor", "claude_code", "codex", "openai", "copilot"]);
+const STANDARD_TOOLS = new Set(["cursor", "claude_code", "codex", "copilot"]);
 
 const TOOL_OPTIONS: Array<{ key: string; label: string; recommended?: boolean }> = [
   { key: "cursor", label: "Cursor" },
   { key: "claude_code", label: "Claude Code", recommended: true },
   { key: "codex", label: "Codex CLI" },
-  { key: "openai", label: "ChatGPT · OpenAI" },
   { key: "copilot", label: "GitHub Copilot" },
 ];
 
 // toolPrefs → dynamic step sequence. Tools the member doesn't use never appear.
 function buildSteps(prefs: string[]): StepId[] {
   const steps: StepId[] = ["tools"];
-  if (prefs.includes("cursor") || prefs.includes("openai")) steps.push("auto");
+  if (prefs.includes("cursor")) steps.push("auto");
   if (prefs.includes("claude_code") || prefs.includes("codex")) steps.push("claude");
   if (prefs.includes("copilot")) steps.push("copilot");
   if (prefs.some((t) => !STANDARD_TOOLS.has(t))) steps.push("custom");
@@ -64,7 +63,7 @@ function buildSteps(prefs: string[]): StepId[] {
 function stepForTool(tool: string): StepId {
   if (tool === "claude_code" || tool === "codex") return "claude";
   if (tool === "copilot") return "copilot";
-  if (tool === "cursor" || tool === "openai") return "auto";
+  if (tool === "cursor") return "auto";
   return "custom";
 }
 
