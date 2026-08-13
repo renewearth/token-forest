@@ -9,6 +9,7 @@ import {
   UsageHourly,
 } from "@/lib/db";
 import type { LimitSnapshotInput, UsageHourlyRow, UsageRow } from "@/lib/types";
+import { canonicalizeModel } from "@/lib/models";
 
 // Load the (tool, externalId) -> memberId mapping once; the identities
 // collection is tiny relative to ingest batches.
@@ -49,6 +50,10 @@ export async function upsertUsageRows(
   if (rows.length === 0) return { upserted: 0, skipped: 0 };
   await connectDb();
   const identities = await identityMap();
+
+  // Normalize model labels before any key is derived, so alias variants dedup
+  // onto one canonical id (see src/lib/models.ts).
+  rows = rows.map((r) => ({ ...r, model: canonicalizeModel(r.model) }));
 
   // Highest existing source priority per logical key touched by this batch.
   const keys = [...new Set(rows.map(logicalKey))].map(
@@ -267,6 +272,10 @@ export async function upsertHourlyRows(
   if (rows.length === 0) return { upserted: 0, skipped: 0 };
   await connectDb();
   const identities = await identityMap();
+
+  // Same alias normalization as the daily upsert.
+  rows = rows.map((r) => ({ ...r, model: canonicalizeModel(r.model) }));
+
   const hKey = (r: UsageHourlyRow) =>
     JSON.stringify([r.hour, r.tool, r.model ?? "", r.externalId]);
 
