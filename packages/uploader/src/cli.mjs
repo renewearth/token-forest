@@ -12,6 +12,7 @@ import * as claudeCode from "./parsers/claude-code.mjs";
 import * as claudeLimits from "./parsers/claude-limits.mjs";
 import * as codex from "./parsers/codex.mjs";
 import * as gemini from "./parsers/gemini.mjs";
+import * as grok from "./parsers/grok.mjs";
 import { sendRows, sendLimits } from "./send.mjs";
 import { buildAndSendDigest } from "./digest.mjs";
 
@@ -244,8 +245,29 @@ async function main() {
     console.error(`warn: skipped Gemini scan (${err.message}).`);
   }
 
-  const rows = [...claudeRows, ...codexRows, ...geminiRows];
-  const hourlyRows = [...claudeHourly, ...codexHourly, ...geminiHourly];
+  // Grok usage (~/.local/share/grok-usage.jsonl, written by grok-q/grok-web
+  // API wrappers). Best-effort, same as Codex/Gemini.
+  let grokRows = [];
+  let grokHourly = [];
+  try {
+    const grokResult = await grok.aggregate({
+      sinceDate: config.since,
+      machineId: config.machineId,
+    });
+    grokRows = grokResult.rows;
+    grokHourly = grokResult.hourlyRows;
+    if (grokResult.stats.linesRead > 0) {
+      console.error(
+        `Grok: read ${fmtInt(grokResult.stats.linesRead)} usage line(s), ` +
+          `${fmtInt(grokResult.stats.events)} call(s).`,
+      );
+    }
+  } catch (err) {
+    console.error(`warn: skipped Grok scan (${err.message}).`);
+  }
+
+  const rows = [...claudeRows, ...codexRows, ...geminiRows, ...grokRows];
+  const hourlyRows = [...claudeHourly, ...codexHourly, ...geminiHourly, ...grokHourly];
   console.error(
     `Aggregated into ${rows.length} daily row(s) and ${hourlyRows.length} hourly row(s).`,
   );
