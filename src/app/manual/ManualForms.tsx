@@ -9,6 +9,9 @@ import {
   type SingleState,
 } from "./actions";
 import type { Member } from "@/lib/queries";
+import { CATALOG_TOOLS, modelsForTool } from "@/lib/models";
+
+const CUSTOM = "__custom__";
 
 const inputCls =
   "w-full rounded-md border border-black/15 bg-transparent px-3 py-2 text-sm outline-none focus:border-[var(--series-1)] dark:border-white/15";
@@ -23,8 +26,20 @@ function FieldError({ msg }: { msg?: string }) {
   return <p className="mt-1 text-xs text-[var(--series-6)]">{msg}</p>;
 }
 
-function SingleRowForm({ members }: { members: Member[]; }) {
+function SingleRowForm({ members, tools }: { members: Member[]; tools: string[] }) {
   const [state, action, pending] = useActionState<SingleState, FormData>(addUsageRow, {});
+
+  // Tool dropdown = catalog tools first, then any extra tools already seen in
+  // the DB, then a free-text escape hatch. Model options depend on the tool.
+  const toolOptions = [...CATALOG_TOOLS, ...tools.filter((t) => !CATALOG_TOOLS.includes(t as never))];
+  const [tool, setTool] = useState<string>(CATALOG_TOOLS[0]);
+  const [model, setModel] = useState<string>("");
+  const customTool = tool === CUSTOM;
+  const [customToolName, setCustomToolName] = useState<string>("");
+  const effectiveTool = customTool ? customToolName : tool;
+  const modelOptions = modelsForTool(effectiveTool);
+  const customModel = model === CUSTOM;
+
   return (
     <form action={action} className="space-y-4">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -49,18 +64,57 @@ function SingleRowForm({ members }: { members: Member[]; }) {
         </div>
         <div>
           <label className={labelCls}>도구</label>
-          <input
-            name="tool"
-            list="known-tools"
-            placeholder="cursor, claude_code, codex, copilot…"
-            required
+          <select
+            name={customTool ? undefined : "tool"}
+            value={tool}
+            onChange={(e) => {
+              setTool(e.target.value);
+              setModel(""); // model list is tool-specific — reset on tool change
+            }}
             className={inputCls}
-          />
+          >
+            {toolOptions.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+            <option value={CUSTOM}>기타(직접 입력)…</option>
+          </select>
+          {customTool && (
+            <input
+              name="tool"
+              value={customToolName}
+              onChange={(e) => setCustomToolName(e.target.value)}
+              placeholder="도구 이름 (예: opencode)"
+              required
+              className={`${inputCls} mt-2`}
+            />
+          )}
           <FieldError msg={state.errors?.tool} />
         </div>
         <div>
           <label className={labelCls}>모델 (선택)</label>
-          <input name="model" placeholder="claude-fable-5, gpt-5…" className={inputCls} />
+          <select
+            name={customModel ? undefined : "model"}
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            className={inputCls}
+          >
+            <option value="">모델 없음 / 미지정</option>
+            {modelOptions.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+            <option value={CUSTOM}>기타(직접 입력)…</option>
+          </select>
+          {customModel && (
+            <input
+              name="model"
+              placeholder="정규 모델명 (예: claude-opus-5)"
+              className={`${inputCls} mt-2`}
+            />
+          )}
         </div>
       </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -225,14 +279,9 @@ export default function ManualForms({
 }) {
   return (
     <div className="space-y-6">
-      <datalist id="known-tools">
-        {tools.map((t) => (
-          <option key={t} value={t} />
-        ))}
-      </datalist>
       <section className="rounded-xl border border-black/10 bg-[var(--surface-1)] p-5 dark:border-white/10">
         <h2 className="mb-4 text-sm font-semibold">단일 행 입력</h2>
-        <SingleRowForm members={members} />
+        <SingleRowForm members={members} tools={tools} />
       </section>
       <section className="rounded-xl border border-black/10 bg-[var(--surface-1)] p-5 dark:border-white/10">
         <h2 className="mb-1 text-sm font-semibold">CSV 가져오기</h2>
