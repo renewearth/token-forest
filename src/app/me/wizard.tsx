@@ -38,12 +38,14 @@ const stepTitle = "mb-3 text-base font-semibold text-[var(--text-primary)]";
 
 type StepId = "tools" | "auto" | "claude" | "copilot" | "custom" | "done";
 
-const STANDARD_TOOLS = new Set(["cursor", "claude_code", "codex", "copilot"]);
+const STANDARD_TOOLS = new Set(["cursor", "claude_code", "codex", "gemini", "grok", "copilot"]);
 
 const TOOL_OPTIONS: Array<{ key: string; label: string; recommended?: boolean }> = [
   { key: "cursor", label: "Cursor" },
   { key: "claude_code", label: "Claude Code", recommended: true },
   { key: "codex", label: "Codex CLI" },
+  { key: "gemini", label: "Gemini CLI" },
+  { key: "grok", label: "Grok CLI" },
   { key: "copilot", label: "GitHub Copilot" },
 ];
 
@@ -51,7 +53,13 @@ const TOOL_OPTIONS: Array<{ key: string; label: string; recommended?: boolean }>
 function buildSteps(prefs: string[]): StepId[] {
   const steps: StepId[] = ["tools"];
   if (prefs.includes("cursor")) steps.push("auto");
-  if (prefs.includes("claude_code") || prefs.includes("codex")) steps.push("claude");
+  if (
+    prefs.includes("claude_code") ||
+    prefs.includes("codex") ||
+    prefs.includes("gemini") ||
+    prefs.includes("grok")
+  )
+    steps.push("claude");
   if (prefs.includes("copilot")) steps.push("copilot");
   if (prefs.some((t) => !STANDARD_TOOLS.has(t))) steps.push("custom");
   steps.push("done");
@@ -61,7 +69,8 @@ function buildSteps(prefs: string[]): StepId[] {
 // Checklist row click passes a tool name ("claude_code", "copilot", …); map it
 // to the wizard step that handles that tool for standalone re-runs.
 function stepForTool(tool: string): StepId {
-  if (tool === "claude_code" || tool === "codex") return "claude";
+  if (tool === "claude_code" || tool === "codex" || tool === "gemini" || tool === "grok")
+    return "claude";
   if (tool === "copilot") return "copilot";
   if (tool === "cursor") return "auto";
   return "custom";
@@ -447,7 +456,8 @@ export function OnboardingWizard(props: {
             </li>
           </ol>
           <p className="mt-2 text-xs text-[var(--text-muted)]">
-            이 설치는 Codex CLI(<code>~/.codex</code>) 사용량도 함께 수집합니다 — 별도 설치가
+            이 설치는 Codex CLI(<code>~/.codex</code>)·Gemini CLI(<code>~/.gemini</code>)·Grok
+            (<code>~/.local/share/grok-usage.jsonl</code>) 사용량도 함께 수집합니다 — 별도 설치가
             필요 없어요.
           </p>
           {detected ? (

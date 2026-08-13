@@ -9,6 +9,7 @@ const TOOL_LABELS: Record<string, string> = {
   copilot: "GitHub Copilot",
   anthropic: "Anthropic",
   gemini: "Gemini",
+  grok: "Grok",
 };
 
 export function toolLabel(tool: string): string {
@@ -29,6 +30,7 @@ const KNOWN_SLOTS: Record<string, number> = {
   copilot: 4,
   anthropic: 5,
   gemini: 6,
+  grok: 3,
 };
 
 export function toolSlot(tool: string): number {

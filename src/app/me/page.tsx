@@ -49,7 +49,7 @@ type RecentUsage = { tokens: number; requests: number };
 
 // Tools with dedicated checklist rows / wizard steps; everything else in
 // toolPrefs is a custom tool (manual entry or a future connector).
-const STANDARD_TOOLS = new Set(["cursor", "claude_code", "codex", "copilot"]);
+const STANDARD_TOOLS = new Set(["cursor", "claude_code", "codex", "gemini", "grok", "copilot"]);
 
 type MemberOnboarding = {
   toolPrefs: string[];
@@ -59,6 +59,8 @@ type MemberOnboarding = {
   identityTools: Set<string>;
   claudeCodeConnected: boolean;
   codexConnected: boolean;
+  geminiConnected: boolean;
+  grokConnected: boolean;
   recentByTool: Map<string, RecentUsage>;
   myLimits: LimitSnapshot[];
   unmapped: UnmappedRow[];
@@ -83,6 +85,8 @@ async function loadOnboarding(
     identities,
     claudeCodeRow,
     codexRow,
+    geminiRow,
+    grokRow,
     recent,
     limits,
     unmapped,
@@ -97,6 +101,16 @@ async function loadOnboarding(
       }).lean(),
       UsageDaily.findOne({
         tool: "codex",
+        memberId: oid,
+        date: { $gte: r14.from },
+      }).lean(),
+      UsageDaily.findOne({
+        tool: "gemini",
+        memberId: oid,
+        date: { $gte: r14.from },
+      }).lean(),
+      UsageDaily.findOne({
+        tool: "grok",
         memberId: oid,
         date: { $gte: r14.from },
       }).lean(),
@@ -148,6 +162,8 @@ async function loadOnboarding(
     identityTools: new Set(identities.map((i) => i.tool)),
     claudeCodeConnected: Boolean(claudeCodeRow),
     codexConnected: Boolean(codexRow),
+    geminiConnected: Boolean(geminiRow),
+    grokConnected: Boolean(grokRow),
     recentByTool,
     myLimits: limits,
     unmapped,
@@ -308,6 +324,8 @@ async function MemberView({
     cursor: data.identityTools.has("cursor"),
     claude_code: data.claudeCodeConnected,
     codex: data.codexConnected,
+    gemini: data.geminiConnected,
+    grok: data.grokConnected,
     copilot: data.githubConnected,
   };
   const connectedCount =
@@ -467,6 +485,45 @@ async function MemberView({
             <p className="text-[var(--text-secondary)]">
               Claude Code를 설치하면 <code>~/.codex</code>의 Codex CLI 사용량도 자동으로 함께
               수집돼요. 별도 설치가 필요 없습니다.{" "}
+              <Link
+                href="/me?step=claude_code"
+                className="text-[var(--series-1)] underline"
+              >
+                연결 마법사 열기
+              </Link>
+            </p>
+          )}
+        </ChecklistRow>
+
+        <ChecklistRow done={checks.gemini} title="Gemini CLI">
+          {checks.gemini ? (
+            <p className="text-[var(--text-muted)]">
+              연결됨 — Claude Code 업로더가 <code>~/.gemini</code> 세션을 함께 수집합니다.
+            </p>
+          ) : (
+            <p className="text-[var(--text-secondary)]">
+              Claude Code를 설치하면 <code>~/.gemini</code>의 Gemini CLI 사용량도 자동으로 함께
+              수집돼요. 별도 설치가 필요 없습니다.{" "}
+              <Link
+                href="/me?step=claude_code"
+                className="text-[var(--series-1)] underline"
+              >
+                연결 마법사 열기
+              </Link>
+            </p>
+          )}
+        </ChecklistRow>
+
+        <ChecklistRow done={checks.grok} title="Grok CLI">
+          {checks.grok ? (
+            <p className="text-[var(--text-muted)]">
+              연결됨 — grok-q/grok-web 래퍼가 <code>~/.local/share/grok-usage.jsonl</code>에 남긴
+              사용량을 업로더가 함께 수집합니다.
+            </p>
+          ) : (
+            <p className="text-[var(--text-secondary)]">
+              grok-q/grok-web 래퍼로 Grok을 쓰면 <code>~/.local/share/grok-usage.jsonl</code>에
+              사용량이 쌓이고, Claude Code 업로더가 자동으로 함께 수집해요.{" "}
               <Link
                 href="/me?step=claude_code"
                 className="text-[var(--series-1)] underline"
