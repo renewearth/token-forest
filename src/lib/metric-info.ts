@@ -9,12 +9,6 @@ export type MetricInfo = {
 };
 
 export const METRIC_INFO: Record<string, MetricInfo> = {
-  cacheHit: {
-    label: "캐시 적중률",
-    meaning: "읽은 컨텍스트 중 캐시로 재사용한 비율.",
-    target: "높을수록 좋음 (75%+ 정착권). 세션 이어가기·컨텍스트 재사용 습관이 올립니다.",
-    trend: "up",
-  },
   cacheReuse: {
     label: "캐시 재사용 배율",
     meaning: "캐시에 적재한 토큰이 몇 번 재사용됐나 (cacheRead/cacheCreation).",
@@ -55,6 +49,12 @@ export const METRIC_INFO: Record<string, MetricInfo> = {
     label: "도구 다양성",
     meaning: "사용량 가중 도구 분산 (0=단일 도구, 1=완전 균등).",
     target: "넓을수록 좋음 — 상황별로 맞는 도구를 골라 쓰는 성숙도.",
+    trend: "up",
+  },
+  modelBreadth: {
+    label: "모델 다양성",
+    meaning: "사용량 가중 모델 분산 (0=단일 모델, 1=완전 균등).",
+    target: "넓을수록 좋음 — 작업 성격에 맞는 모델을 골라 쓰는 성숙도.",
     trend: "up",
   },
   streak: {

@@ -159,3 +159,31 @@ export function weeklyTeamSeries(
     return point;
   });
 }
+
+// 모델 다양성 주별 시리즈 — 멤버별 사용량 가중 엔트로피(toolEntropy 재사용)의
+// 풀드(팀 합산 분포)+중앙값+IQR(8명 가드). weeklyTeamSeries와 동일 관점 구조지만
+// 누적 단위가 ScoreSums가 아니라 모델→토큰 맵이다.
+export function weeklyModelBreadthSeries(
+  rows: Array<{ week: string; memberId: string; byModel: Record<string, number> }>,
+): WeeklySeriesPoint[] {
+  const byWeek = new Map<string, Map<string, Record<string, number>>>();
+  for (const r of rows) {
+    const wk = byWeek.get(r.week) ?? new Map<string, Record<string, number>>();
+    const cur = wk.get(r.memberId) ?? {};
+    for (const [m, t] of Object.entries(r.byModel)) cur[m] = (cur[m] ?? 0) + t;
+    wk.set(r.memberId, cur);
+    byWeek.set(r.week, wk);
+  }
+  return [...byWeek.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([week, members]) => {
+    const pooled: Record<string, number> = {};
+    for (const map of members.values())
+      for (const [m, t] of Object.entries(map)) pooled[m] = (pooled[m] ?? 0) + t;
+    const vals = [...members.values()].map(toolEntropy).filter((v): v is number => v != null);
+    const point: WeeklySeriesPoint = { week, pooled: toolEntropy(pooled), median: median(vals) };
+    if (showBand(members.size)) {
+      const band = iqrBand(vals);
+      if (band) { point.p25 = band.p25; point.p75 = band.p75; }
+    }
+    return point;
+  });
+}

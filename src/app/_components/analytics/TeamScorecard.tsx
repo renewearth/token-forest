@@ -19,12 +19,12 @@ export type ModelAdoptionDisplay = {
 };
 
 export type TeamScorecardProps = {
-  cacheHit: WeeklySeriesPoint[]; // 0..1
   cacheReuse: WeeklySeriesPoint[]; // 배율
   contextYield: WeeklySeriesPoint[]; // 0..1
   sessionDepth: WeeklySeriesPoint[]; // 턴/세션, claude_code 한정
   cacheSavingsPct: number | null; // 0..1 (A2)
   premiumShare: WeeklySeriesPoint[]; // 0..1, 프리미엄(Opus/Fable급) 토큰 비중
+  modelBreadth: WeeklySeriesPoint[]; // 0..1, 사용량 가중 모델 엔트로피
   modelAdoption: ModelAdoptionDisplay[];
   rampAvg: number[] | null; // 코호트 평균 [1주차..N주차], 코호트 0명이면 null
   cohortSize: number;
@@ -94,12 +94,12 @@ function TrendPair({
 }
 
 export default function TeamScorecard({
-  cacheHit,
   cacheReuse,
   contextYield,
   sessionDepth,
   cacheSavingsPct,
   premiumShare,
+  modelBreadth,
   modelAdoption,
   rampAvg,
   cohortSize,
@@ -125,15 +125,6 @@ export default function TeamScorecard({
           가중 자원 기준 — 달러 아님. 모델별 공개 단가로 상대 비중만 계산합니다.
         </p>
         <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <TrendPair
-            title="캐시 적중률"
-            data={cacheHit}
-            domain={[0, 1]}
-            tickFormatter={pctTick}
-            format={pct}
-            yWidth={40}
-            info={METRIC_INFO.cacheHit}
-          />
           <TrendPair
             title="캐시 재사용 배율"
             data={cacheReuse}
@@ -238,12 +229,21 @@ export default function TeamScorecard({
       )}
 
       <section>
-        <h3 className="flex items-center text-xs font-semibold text-[var(--text-muted)]">
-          확장
-          <InfoTip info={METRIC_INFO.toolBreadth} />
-        </h3>
-        <p className="mt-1 text-xs text-[var(--text-muted)]">
-          도구·모델 다양성 추세는 위 &ldquo;도입 확산&rdquo; 섹션을 참조하세요 (도입 매트릭스 · 주간 활성 사용자).
+        <h3 className="text-xs font-semibold text-[var(--text-muted)]">확장</h3>
+        <div className="mt-2">
+          <TrendPair
+            title="모델 다양성"
+            data={modelBreadth}
+            domain={[0, 1]}
+            tickFormatter={pctTick}
+            format={pct}
+            yWidth={40}
+            info={METRIC_INFO.modelBreadth}
+          />
+        </div>
+        <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+          사용량 가중 엔트로피 — 한 모델에 몰릴수록 0, 여러 모델을 고루 쓸수록 1에 가깝습니다.
+          도구 다양성<InfoTip info={METRIC_INFO.toolBreadth} /> 추세는 위 &ldquo;도입 확산&rdquo; 섹션(도입 매트릭스·주간 활성)을 참조하세요.
         </p>
       </section>
     </div>

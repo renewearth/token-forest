@@ -1,7 +1,7 @@
 import {
   cacheReuseRatio, contextYield, sessionDepth, requestAnatomy,
   cacheSavingsRate, toolEntropy, median, iqrBand, showBand,
-  adoptionLeadDays, rampWeeks, weeklyTeamSeries,
+  adoptionLeadDays, rampWeeks, weeklyTeamSeries, weeklyModelBreadthSeries,
 } from "../lib/scorecard";
 import type { ScoreSums } from "../lib/scorecard";
 
@@ -86,5 +86,21 @@ const week7 = weeklyTeamSeries(membersOf(7), cacheHit);
 const week8 = weeklyTeamSeries(membersOf(8), cacheHit);
 assert(week7[0].p25 === undefined && week7[0].p75 === undefined, "7명 → 밴드 없음");
 assert(week8[0].p25 !== undefined && week8[0].p75 !== undefined, "8명 → 밴드 있음");
+
+// 모델 다양성 주별 — 멤버별 사용량 가중 엔트로피(단일=0, 균등2모델=1)의
+// 풀드+중앙값. 팀 합산 분포 엔트로피(풀드)는 0~1 사이.
+const mb = weeklyModelBreadthSeries([
+  { week: "2026-07-20", memberId: "a", byModel: { opus: 100 } }, // 단일 → 0
+  { week: "2026-07-20", memberId: "b", byModel: { opus: 50, sonnet: 50 } }, // 균등 → 1
+]);
+assert(mb.length === 1, "모델 다양성 주 1개");
+close(mb[0].median, 0.5, "모델 다양성 중앙값 = (0+1)/2");
+assert(mb[0].pooled !== null && mb[0].pooled > 0 && mb[0].pooled < 1, "풀드 엔트로피 0~1 (팀 합산 {opus:150,sonnet:50})");
+// 멤버별 맵이 주 단위로 병합되는지 — 같은 주·멤버 두 행이면 합쳐 단일 분포로.
+const mbMerge = weeklyModelBreadthSeries([
+  { week: "2026-07-27", memberId: "a", byModel: { opus: 50 } },
+  { week: "2026-07-27", memberId: "a", byModel: { sonnet: 50 } },
+]);
+close(mbMerge[0].median, 1, "병합 후 균등 2모델 → 엔트로피 1");
 
 console.log("ALL PASS");
