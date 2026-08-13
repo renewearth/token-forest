@@ -11,6 +11,7 @@ import { parseArgs, resolveConfig, configPath } from "./config.mjs";
 import * as claudeCode from "./parsers/claude-code.mjs";
 import * as claudeLimits from "./parsers/claude-limits.mjs";
 import * as codex from "./parsers/codex.mjs";
+import * as gemini from "./parsers/gemini.mjs";
 import { sendRows, sendLimits } from "./send.mjs";
 import { buildAndSendDigest } from "./digest.mjs";
 
@@ -223,8 +224,28 @@ async function main() {
     console.error(`warn: skipped Codex scan (${err.message}).`);
   }
 
-  const rows = [...claudeRows, ...codexRows];
-  const hourlyRows = [...claudeHourly, ...codexHourly];
+  // Gemini CLI usage (~/.gemini/tmp/**/chats). Best-effort, same as Codex.
+  let geminiRows = [];
+  let geminiHourly = [];
+  try {
+    const geminiResult = await gemini.aggregate({
+      sinceDate: config.since,
+      machineId: config.machineId,
+    });
+    geminiRows = geminiResult.rows;
+    geminiHourly = geminiResult.hourlyRows;
+    if (geminiResult.stats.files > 0) {
+      console.error(
+        `Gemini: scanned ${geminiResult.stats.files} session file(s), ` +
+          `${fmtInt(geminiResult.stats.events)} usage event(s).`,
+      );
+    }
+  } catch (err) {
+    console.error(`warn: skipped Gemini scan (${err.message}).`);
+  }
+
+  const rows = [...claudeRows, ...codexRows, ...geminiRows];
+  const hourlyRows = [...claudeHourly, ...codexHourly, ...geminiHourly];
   console.error(
     `Aggregated into ${rows.length} daily row(s) and ${hourlyRows.length} hourly row(s).`,
   );
