@@ -11,6 +11,8 @@ import { parseArgs, resolveConfig, configPath } from "./config.mjs";
 import * as claudeCode from "./parsers/claude-code.mjs";
 import * as claudeLimits from "./parsers/claude-limits.mjs";
 import * as codex from "./parsers/codex.mjs";
+import * as gemini from "./parsers/gemini.mjs";
+import * as grok from "./parsers/grok.mjs";
 import { sendRows, sendLimits } from "./send.mjs";
 import { buildAndSendDigest } from "./digest.mjs";
 
@@ -223,8 +225,49 @@ async function main() {
     console.error(`warn: skipped Codex scan (${err.message}).`);
   }
 
-  const rows = [...claudeRows, ...codexRows];
-  const hourlyRows = [...claudeHourly, ...codexHourly];
+  // Gemini CLI usage (~/.gemini/tmp/**/chats). Best-effort, same as Codex.
+  let geminiRows = [];
+  let geminiHourly = [];
+  try {
+    const geminiResult = await gemini.aggregate({
+      sinceDate: config.since,
+      machineId: config.machineId,
+    });
+    geminiRows = geminiResult.rows;
+    geminiHourly = geminiResult.hourlyRows;
+    if (geminiResult.stats.files > 0) {
+      console.error(
+        `Gemini: scanned ${geminiResult.stats.files} session file(s), ` +
+          `${fmtInt(geminiResult.stats.events)} usage event(s).`,
+      );
+    }
+  } catch (err) {
+    console.error(`warn: skipped Gemini scan (${err.message}).`);
+  }
+
+  // Grok usage (~/.local/share/grok-usage.jsonl, written by grok-q/grok-web
+  // API wrappers). Best-effort, same as Codex/Gemini.
+  let grokRows = [];
+  let grokHourly = [];
+  try {
+    const grokResult = await grok.aggregate({
+      sinceDate: config.since,
+      machineId: config.machineId,
+    });
+    grokRows = grokResult.rows;
+    grokHourly = grokResult.hourlyRows;
+    if (grokResult.stats.linesRead > 0) {
+      console.error(
+        `Grok: read ${fmtInt(grokResult.stats.linesRead)} usage line(s), ` +
+          `${fmtInt(grokResult.stats.events)} call(s).`,
+      );
+    }
+  } catch (err) {
+    console.error(`warn: skipped Grok scan (${err.message}).`);
+  }
+
+  const rows = [...claudeRows, ...codexRows, ...geminiRows, ...grokRows];
+  const hourlyRows = [...claudeHourly, ...codexHourly, ...geminiHourly, ...grokHourly];
   console.error(
     `Aggregated into ${rows.length} daily row(s) and ${hourlyRows.length} hourly row(s).`,
   );
