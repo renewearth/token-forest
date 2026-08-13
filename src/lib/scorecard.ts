@@ -34,9 +34,11 @@ export function cacheReuseRatio(s: ScoreSums): number | null {
   return ratio(s.cacheRead, s.cacheCreation);
 }
 
-// G4 컨텍스트 수율 — 읽은 전체 컨텍스트 대비 생성량. A1과 견제 쌍.
+// G4 컨텍스트 수율 — 새로 끌어온 컨텍스트(cacheCreation) 1토큰당 산출.
+// 숲 성장 yieldBand(growth.ts)·/guide 정의와 동일 분모. cacheRead(재읽기)를
+// 분모에 넣으면 에이전틱 툴에서 재읽기가 output의 수백 배라 항상 ~0% 됨(폐기).
 export function contextYield(s: ScoreSums): number | null {
-  return ratio(s.output, s.input + s.cacheRead);
+  return ratio(s.output, s.cacheCreation);
 }
 
 // G2 세션 깊이 — 세션당 에이전트 턴 수 (claude_code 합만 넣을 것). 무방향 지표.
@@ -150,6 +152,34 @@ export function weeklyTeamSeries(
     const point: WeeklySeriesPoint = {
       week, pooled: metric(pooledSums), median: median(vals),
     };
+    if (showBand(members.size)) {
+      const band = iqrBand(vals);
+      if (band) { point.p25 = band.p25; point.p75 = band.p75; }
+    }
+    return point;
+  });
+}
+
+// 모델 다양성 주별 시리즈 — 멤버별 사용량 가중 엔트로피(toolEntropy 재사용)의
+// 풀드(팀 합산 분포)+중앙값+IQR(8명 가드). weeklyTeamSeries와 동일 관점 구조지만
+// 누적 단위가 ScoreSums가 아니라 모델→토큰 맵이다.
+export function weeklyModelBreadthSeries(
+  rows: Array<{ week: string; memberId: string; byModel: Record<string, number> }>,
+): WeeklySeriesPoint[] {
+  const byWeek = new Map<string, Map<string, Record<string, number>>>();
+  for (const r of rows) {
+    const wk = byWeek.get(r.week) ?? new Map<string, Record<string, number>>();
+    const cur = wk.get(r.memberId) ?? {};
+    for (const [m, t] of Object.entries(r.byModel)) cur[m] = (cur[m] ?? 0) + t;
+    wk.set(r.memberId, cur);
+    byWeek.set(r.week, wk);
+  }
+  return [...byWeek.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([week, members]) => {
+    const pooled: Record<string, number> = {};
+    for (const map of members.values())
+      for (const [m, t] of Object.entries(map)) pooled[m] = (pooled[m] ?? 0) + t;
+    const vals = [...members.values()].map(toolEntropy).filter((v): v is number => v != null);
+    const point: WeeklySeriesPoint = { week, pooled: toolEntropy(pooled), median: median(vals) };
     if (showBand(members.size)) {
       const band = iqrBand(vals);
       if (band) { point.p25 = band.p25; point.p75 = band.p75; }

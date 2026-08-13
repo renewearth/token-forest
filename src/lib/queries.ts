@@ -1282,6 +1282,31 @@ export async function getPremiumShareWeekly(range: DateRange): Promise<PremiumSh
   return [...acc.values()];
 }
 
+// 모델 다양성 — 주·멤버별 모델→토큰 맵. 모델 단위 그룹핑이 필요해
+// getScorecardWeeklySums(도구 단위)로는 못 만든다. tokens=TOKENS_EXPR(input+output,
+// 캐시 제외 — premium/donut과 동일 정의). 엔트로피 계산은 scorecard.ts에서.
+export type ModelBreadthWeeklyRow = { week: string; memberId: string; byModel: Record<string, number> };
+
+export async function getModelBreadthWeekly(range: DateRange): Promise<ModelBreadthWeeklyRow[]> {
+  await connectDb();
+  const rows = await UsageDaily.aggregate([
+    { $match: { date: { $gte: range.from, $lte: range.to }, memberId: { $ne: null } } },
+    { $group: { _id: { memberId: "$memberId", date: "$date", model: "$model" }, tokens: { $sum: TOKENS_EXPR } } },
+  ]);
+  const acc = new Map<string, ModelBreadthWeeklyRow>();
+  for (const r of rows) {
+    const model = String(r._id.model ?? "");
+    if (!model) continue;
+    const week = mondayOf(r._id.date);
+    const memberId = String(r._id.memberId);
+    const key = `${week}|${memberId}`;
+    const cur = acc.get(key) ?? { week, memberId, byModel: {} };
+    cur.byModel[model] = (cur.byModel[model] ?? 0) + r.tokens;
+    acc.set(key, cur);
+  }
+  return [...acc.values()];
+}
+
 // A2 캐시 절감 — (tool,model) 합산에 단가 적용해 saved/spent 가중치 산출.
 export async function getCacheSavings(range: DateRange): Promise<{ saved: number; spent: number }> {
   await connectDb();

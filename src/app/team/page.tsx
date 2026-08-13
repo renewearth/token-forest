@@ -12,6 +12,7 @@ import {
   getMemberLeaderboard,
   getMemberWowDeltas,
   getModelAdoption,
+  getModelBreadthWeekly,
   getModelDistribution,
   getModelTierTrend,
   getOnboardingActivity,
@@ -60,6 +61,7 @@ import {
   rampWeeks,
   sessionDepth as sessionDepthMetric,
   showBand,
+  weeklyModelBreadthSeries,
   weeklyTeamSeries,
 } from "@/lib/scorecard";
 import type { WeeklySeriesPoint } from "@/lib/scorecard";
@@ -182,6 +184,7 @@ export default async function TeamPage({
     seatLeaderboard, // seat utilization is fixed to 30 days regardless of tabs
     allMembers,
     numStyle,
+    modelBreadthWeekly,
   ] = await Promise.all([
     getTeamAdoptionRate(range),
     getAdoptionMatrix(),
@@ -203,14 +206,13 @@ export default async function TeamPage({
     getMemberLeaderboard(rangeForDays(30)),
     getAllMembers(),
     getNumStyle(),
+    getModelBreadthWeekly(range),
   ]);
 
   // ---- 팀 스코어카드 조립 (순수 계산은 scorecard.ts, 여긴 원재료 배선만) ----
   const claudeOnlyWeekly = scoreWeekly.filter((r) => r.tool === "claude_code");
-  const cacheHitSeries = weeklyTeamSeries(scoreWeekly, (s) =>
-    s.input + s.cacheRead > 0 ? s.cacheRead / (s.input + s.cacheRead) : null,
-  );
   const cacheReuseSeries = weeklyTeamSeries(scoreWeekly, cacheReuseRatio);
+  const modelBreadthSeries = weeklyModelBreadthSeries(modelBreadthWeekly);
   const contextYieldSeries = weeklyTeamSeries(scoreWeekly, contextYieldMetric);
   const sessionDepthSeries = weeklyTeamSeries(claudeOnlyWeekly, sessionDepthMetric);
   const premiumShareSeriesData = premiumShareSeries(premiumShareWeekly);
@@ -390,12 +392,12 @@ export default async function TeamPage({
           </div>
           {scoreWeekly.length ? (
             <TeamScorecard
-              cacheHit={cacheHitSeries}
               cacheReuse={cacheReuseSeries}
               contextYield={contextYieldSeries}
               sessionDepth={sessionDepthSeries}
               cacheSavingsPct={cacheSavingsPct}
               premiumShare={premiumShareSeriesData}
+              modelBreadth={modelBreadthSeries}
               modelAdoption={modelAdoption}
               rampAvg={rampAvg}
               cohortSize={onboarding.length}

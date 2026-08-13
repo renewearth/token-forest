@@ -69,19 +69,7 @@ export default async function Scorecard({ memberId }: { memberId: string }) {
   const med = (f: (m: MemberCalc) => number | null) =>
     median(others.map(f).filter((v): v is number => v != null));
 
-  const cache = (m: MemberCalc) =>
-    m.total.input + m.total.cacheRead > 0
-      ? m.total.cacheRead / (m.total.input + m.total.cacheRead)
-      : null;
-
   const myAnatomy = requestAnatomy(mine.total);
-
-  const hints: string[] = [];
-  const myCache = cache(mine);
-  const teamCache = med(cache);
-  if (myCache != null && teamCache != null && myCache < teamCache - 0.15) {
-    hints.push("캐시 적중률이 팀 대비 낮습니다 — 세션을 이어가거나 컨텍스트 재사용을 늘려보세요.");
-  }
   const myReuse = cacheReuseRatio(mine.total);
   const myYield = contextYield(mine.total);
 
@@ -94,9 +82,8 @@ export default async function Scorecard({ memberId }: { memberId: string }) {
         </section>
         <section>
           <h3 className="text-xs font-semibold text-[var(--text-muted)]">효율</h3>
-          <p>캐시 적중률<InfoTip info={METRIC_INFO.cacheHit} /> {pct(myCache)}{delta(myCache, teamCache, true)} <span className="text-[var(--text-muted)]">팀 {pct(teamCache)}</span></p>
           <p>캐시 재사용 배율<InfoTip info={METRIC_INFO.cacheReuse} /> {num(myReuse)}{delta(myReuse, med((m) => cacheReuseRatio(m.total)), true)} · 컨텍스트 수율<InfoTip info={METRIC_INFO.contextYield} /> {pct(myYield)}{delta(myYield, med((m) => contextYield(m.total)), true)}</p>
-          <p className="text-xs text-[var(--text-muted)]">재사용 배율과 수율은 함께 보세요 — 세션을 길게 끌면 배율은 오르지만 수율이 떨어집니다.</p>
+          <p className="text-xs text-[var(--text-muted)]">컨텍스트 수율은 새로 끌어온 컨텍스트 1토큰당 산출량입니다 — 높을수록 맥락을 알차게 씁니다.</p>
         </section>
         <section>
           <h3 className="text-xs font-semibold text-[var(--text-muted)]">숙련</h3>
@@ -109,11 +96,6 @@ export default async function Scorecard({ memberId }: { memberId: string }) {
           <h3 className="text-xs font-semibold text-[var(--text-muted)]">확장</h3>
           <p>도구 다양성<InfoTip info={METRIC_INFO.toolBreadth} /> {num(toolEntropy(mine.byTool), 2)}{delta(toolEntropy(mine.byTool), med((m) => toolEntropy(m.byTool)), true)} · 사용 모델 {mine.models.size}종</p>
         </section>
-        {hints.length > 0 && (
-          <ul className="rounded-lg bg-[var(--surface-2)] px-3 py-2 text-xs">
-            {hints.map((h) => <li key={h}>💡 {h}</li>)}
-          </ul>
-        )}
         <p className="text-[11px] text-[var(--text-muted)]">
           이 카드는 본인에게만 보입니다. 나무(성장)는 습관 동기부여용, 스코어카드는 정밀 분석 — 다르게 보이면 스코어카드가 기준입니다.
         </p>
