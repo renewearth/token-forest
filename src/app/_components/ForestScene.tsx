@@ -1,6 +1,6 @@
 // src/app/_components/ForestScene.tsx
 import Link from "next/link";
-import { connectDb, Member } from "@/lib/db";
+import { connectDb, Member, VISIBLE_MEMBER } from "@/lib/db";
 import { getGrowthDays } from "@/lib/queries";
 import { computeGrowth } from "@/lib/growth";
 import { todayKst, teamEpoch } from "@/lib/date";
@@ -54,7 +54,7 @@ const BAND_HILL: Record<TimeBand, string> = {
 
 export default async function ForestScene({ band }: { band?: TimeBand }) {
   await connectDb();
-  const members = await Member.find({}, { name: 1, onboardedAt: 1 }).lean();
+  const members = await Member.find(VISIBLE_MEMBER, { name: 1, onboardedAt: 1 }).lean();
   if (members.length === 0) return <EmptyState message="등록된 구성원이 없습니다." />;
   const today = todayKst();
   const trees = await Promise.all(

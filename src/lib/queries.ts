@@ -7,6 +7,7 @@ import {
   SyncRun,
   UsageDaily,
   UsageHourly,
+  VISIBLE_MEMBER,
 } from "@/lib/db";
 import { canClaim } from "@/lib/claim";
 import { isoDaysAgo } from "@/lib/date";
@@ -237,7 +238,7 @@ export type MemberListRow = {
 export async function getMemberList(): Promise<MemberListRow[]> {
   await connectDb();
   const [membersList, usage] = await Promise.all([
-    Member.find().sort({ name: 1 }).lean(),
+    Member.find(VISIBLE_MEMBER).sort({ name: 1 }).lean(),
     UsageDaily.aggregate([
       { $match: { memberId: { $ne: null } } },
       {
@@ -321,7 +322,7 @@ export async function getMember(id: string): Promise<MemberInfo | undefined> {
 // All members for the manual-entry select (no aggregates).
 export async function getAllMembers(): Promise<MemberInfo[]> {
   await connectDb();
-  const rows = await Member.find().sort({ name: 1 }).lean();
+  const rows = await Member.find(VISIBLE_MEMBER).sort({ name: 1 }).lean();
   return rows.map((m) => ({ id: String(m._id), name: m.name, email: m.email }));
 }
 
@@ -721,7 +722,7 @@ export async function getTeamAdoptionRate(
 ): Promise<WeeklyRate[]> {
   await connectDb();
   const [total, rows] = await Promise.all([
-    Member.countDocuments(),
+    Member.countDocuments(VISIBLE_MEMBER),
     UsageDaily.aggregate([
       { $match: { memberId: { $ne: null }, ...inRange(range) } },
       {
@@ -765,7 +766,7 @@ export async function getAdoptionMatrix(): Promise<{
 }> {
   await connectDb();
   const [members, usage] = await Promise.all([
-    Member.find().sort({ name: 1 }).lean(),
+    Member.find(VISIBLE_MEMBER).sort({ name: 1 }).lean(),
     UsageDaily.aggregate([
       { $match: { memberId: { $ne: null } } },
       {
@@ -814,7 +815,7 @@ export async function getInactiveMembers(days = 7): Promise<InactiveMember[]> {
   await connectDb();
   const cutoff = isoDaysAgo(days);
   const [members, usage] = await Promise.all([
-    Member.find().sort({ name: 1 }).lean(),
+    Member.find(VISIBLE_MEMBER).sort({ name: 1 }).lean(),
     UsageDaily.aggregate([
       { $match: { memberId: { $ne: null } } },
       { $group: { _id: "$memberId", lastDate: { $max: "$date" } } },
