@@ -14,6 +14,12 @@ export interface MemberDoc {
   // (or explicitly skipped through) the wizard. null = wizard not completed.
   toolPrefs: string[];
   onboardedAt: Date | null;
+  // Roster-visibility flag. Some Member docs exist only to author content (the
+  // "AX 리포트" account publishes /knowhow posts) and have no usage of their
+  // own. hidden:true keeps them out of the user-facing roster (member list,
+  // team adoption/inactive/matrix, home forest) while their authored posts
+  // still render. Absent/false = a normal, visible member.
+  hidden?: boolean;
   createdAt: Date;
 }
 
@@ -159,9 +165,15 @@ const memberSchema = new Schema<MemberDoc>(
     githubTokenEnc: { type: String, default: null },
     toolPrefs: { type: [String], default: [] },
     onboardedAt: { type: Date, default: null },
+    hidden: { type: Boolean, default: false },
   },
   { timestamps: { createdAt: true, updatedAt: false } },
 );
+
+// Shared filter for every query that enumerates the roster for display. Apply
+// to the Member.find()/countDocuments() call, NOT to usage aggregations (those
+// join back to members by id and never surface a hidden, usage-less account).
+export const VISIBLE_MEMBER = { hidden: { $ne: true } } as const;
 
 // Maps a tool-native user identifier (cursor email, github
 // username, ...) to a member. New tools only need new documents.
