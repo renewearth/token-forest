@@ -16,7 +16,7 @@
     "sync": "tsx src/scripts/sync.ts",
     "report": "tsx src/scripts/report.ts",
     "ax-metrics": "tsx src/scripts/ax-metrics.ts",
-    "verify-cron": "tsx src/scripts/verify-cron.ts"
+    "verify-cron": "tsx src/scripts/verify-cron.ts",
     "verify-models": "tsx src/scripts/verify-models.ts"
   },
   "dependencies": {
