@@ -1,6 +1,7 @@
 import { connectDb, UsageDaily } from "@/lib/db";
 import { isoDaysAgo } from "@/lib/date";
 import { ACTIVE_USER_EXPR, TOKENS_EXPR } from "@/lib/queries";
+import { claimOnce, releaseClaim } from "@/lib/cron";
 
 interface ToolWeek {
   tool: string;
@@ -89,14 +90,33 @@ export async function buildWeeklyReport(): Promise<string> {
 export async function sendWeeklyReport(): Promise<void> {
   const webhook = process.env.SLACK_WEBHOOK_URL;
   if (!webhook) throw new Error("SLACK_WEBHOOK_URL env var is not set");
-  const text = await buildWeeklyReport();
-  const res = await fetch(webhook, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-  });
-  if (!res.ok) {
-    throw new Error(`Slack webhook failed: ${res.status} ${await res.text()}`);
+
+  // The weekly cron is scheduled in every running server instance, so without
+  // a cross-instance guard the report goes out once per instance (observed: 3x
+  // on 2026-08-17). Claim the week atomically; only the winner sends. Keyed by
+  // the report's own week-start so a re-send for the same week is suppressed
+  // regardless of how many instances fire.
+  const weekStart = isoDaysAgo(7);
+  const key = `weekly-report:${weekStart}`;
+  if (!(await claimOnce(key))) {
+    console.log(`[slack] weekly report ${weekStart} already sent — skipping`);
+    return;
+  }
+
+  try {
+    const text = await buildWeeklyReport();
+    const res = await fetch(webhook, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) {
+      throw new Error(`Slack webhook failed: ${res.status} ${await res.text()}`);
+    }
+  } catch (err) {
+    // The send failed — release the claim so a later run can retry this week.
+    await releaseClaim(key).catch(() => {});
+    throw err;
   }
 }
 

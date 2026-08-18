@@ -53,6 +53,17 @@ export interface SyncRunDoc {
   ranAt: Date;
 }
 
+// Cross-instance once-only marker. The in-process cron (instrumentation.ts) is
+// scheduled by EVERY running server instance, so a job with side effects (the
+// weekly Slack report) fires once per instance. A row here, guarded by the
+// unique index on `key`, lets exactly one instance claim a job and the rest
+// skip. See src/lib/cron.ts.
+export interface CronMarkerDoc {
+  _id: Types.ObjectId;
+  key: string;
+  createdAt: Date;
+}
+
 // ADDITIVE, hour-grained mirror of usage_daily written only by hour-capable
 // sources (claude_code uploader, Cursor, Copilot). Used solely by the time-of-day
 // heatmap / hourly drill-down and NEVER summed with usage_daily.
@@ -278,6 +289,11 @@ const syncRunSchema = new Schema<SyncRunDoc>(
 );
 syncRunSchema.index({ tool: 1, status: 1, _id: -1 });
 
+const cronMarkerSchema = new Schema<CronMarkerDoc>(
+  { key: { type: String, required: true, unique: true } },
+  { timestamps: { createdAt: true, updatedAt: false } },
+);
+
 const postSchema = new Schema<PostDoc>(
   {
     source: { type: String, enum: ["member", "ingest"], required: true },
@@ -317,5 +333,6 @@ export const UsageHourly = model("UsageHourly", usageHourlySchema);
 export const LimitSnapshot = model("LimitSnapshot", limitSnapshotSchema);
 export const Digest = model("Digest", digestSchema);
 export const SyncRun = model("SyncRun", syncRunSchema);
+export const CronMarker = model("CronMarker", cronMarkerSchema);
 export const Post = model("Post", postSchema);
 export const Reaction = model("Reaction", reactionSchema);
