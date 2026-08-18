@@ -17,6 +17,7 @@
     "report": "tsx src/scripts/report.ts",
     "ax-metrics": "tsx src/scripts/ax-metrics.ts",
     "verify-cron": "tsx src/scripts/verify-cron.ts"
+    "verify-models": "tsx src/scripts/verify-models.ts"
   },
   "dependencies": {
     "mongoose": "^9.7.4",
