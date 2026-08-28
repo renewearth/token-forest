@@ -72,7 +72,7 @@ export default function GuidePage() {
             </div>
             <p>
               효율 보너스 = <b className="text-[var(--text-primary)]">컨텍스트 수율</b>(산출 ÷ 새로 끌어온
-              컨텍스트) 밴드 + 도구 다양성. 주 1회 휴식은 스트릭이 유지된다.
+              컨텍스트) 밴드 + 도구 다양성.
             </p>
             <p>
               스트릭이 끊겨도 <b className="text-[var(--text-primary)]">🟠 불씨</b>로 남는다. 유예창
