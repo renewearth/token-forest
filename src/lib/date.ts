@@ -10,6 +10,28 @@ export function addDays(date: string, days: number): string {
     .slice(0, 10);
 }
 
+// 0=Sun .. 6=Sat (UTC). 성장 경계는 KST지만 요일 판정은 날짜 문자열만으로 충분하다.
+export function weekday(date: string): number {
+  return new Date(`${date}T00:00:00Z`).getUTCDay();
+}
+
+// 주말(토·일) 여부. 공휴일 캘린더는 후속 과제 — 현재는 주말만 rest로 본다.
+export function isWeekend(date: string): boolean {
+  const d = weekday(date);
+  return d === 0 || d === 6;
+}
+
+// `date`로부터 영업일(주말 제외) n일 뒤. n=0이면 그대로 반환.
+export function addBusinessDays(date: string, n: number): string {
+  let cur = date;
+  let left = n;
+  while (left > 0) {
+    cur = addDays(cur, 1);
+    if (!isWeekend(cur)) left--;
+  }
+  return cur;
+}
+
 export function todayUtc(): string {
   return new Date().toISOString().slice(0, 10);
 }

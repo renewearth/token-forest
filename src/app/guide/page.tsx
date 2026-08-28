@@ -74,6 +74,13 @@ export default function GuidePage() {
               효율 보너스 = <b className="text-[var(--text-primary)]">컨텍스트 수율</b>(산출 ÷ 새로 끌어온
               컨텍스트) 밴드 + 도구 다양성. 주 1회 휴식은 스트릭이 유지된다.
             </p>
+            <p>
+              스트릭이 끊겨도 <b className="text-[var(--text-primary)]">🟠 불씨</b>로 남는다. 유예창
+              <b className="text-[var(--text-primary)]"> 2 영업일</b> 안에 돌아오면 되살아난다 — 주말 끊김은
+              <b className="text-[var(--text-primary)]"> 월요일 한 번</b>이면 자동 연결(주말 페널티 없음),
+              그 외엔 자격 활동 2일. 성취로 모은 <b className="text-[var(--text-primary)]">🎟️ 복구 토큰</b>
+              (최대 2)은 못 돌아온 스트릭을 자동으로 되살린다.
+            </p>
             <p className="font-semibold text-[var(--accent-strong)]">
               토큰을 많이 쓴다고 나무가 크지 않는다 — 꾸준함과 효율만 반영된다.
             </p>
