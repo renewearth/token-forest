@@ -57,6 +57,15 @@ interface CopilotMember {
 // "copilot" identity whose externalId is their GitHub username. Decryption is
 // deferred to the per-member loop so one corrupt/legacy token (which throws)
 // cannot abort the sync for everyone else.
+// A GitHub username is alphanumeric with single hyphens — never an email. The
+// manual-import path keys Copilot token rows on the member's email, which then
+// risks re-registering as a "copilot" identity; such an externalId would 404
+// every poll. Skip anything that isn't a plausible GitHub login so one stray
+// email identity can't fail the whole sync.
+function isGithubUsername(externalId: string): boolean {
+  return /^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$/.test(externalId);
+}
+
 async function eligibleMembers(): Promise<CopilotMember[]> {
   await connectDb();
   const identities = await MemberIdentity.find({ tool: "copilot" }).lean();
@@ -67,6 +76,12 @@ async function eligibleMembers(): Promise<CopilotMember[]> {
     ]),
   );
   return identities.flatMap((i) => {
+    if (!isGithubUsername(i.externalId)) {
+      console.warn(
+        `[copilot] skipping identity ${i.externalId}: not a GitHub username (Copilot polls by GitHub login, not email)`,
+      );
+      return [];
+    }
     const member = membersById.get(String(i.memberId));
     return member?.githubTokenEnc
       ? [{ username: i.externalId, tokenEnc: member.githubTokenEnc }]
