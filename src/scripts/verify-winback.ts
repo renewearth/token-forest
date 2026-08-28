@@ -89,6 +89,17 @@ const EPOCH = "2026-08-01";
   assert(g.ember?.have === 0, `자격 활동 0 (got ${g.ember?.have})`);
 }
 
+// ── AC5b: 공휴일도 rest — 주말+공휴일 gap은 브릿지(영업일 1회)로 복구 ──
+{
+  // 금(21) 활동 → 토·일(22·23)·월(24 공휴일) 결석 → 화(25) 복귀.
+  const days = ["2026-08-17","2026-08-18","2026-08-19","2026-08-20","2026-08-21","2026-08-25"].map((d) => day(d));
+  const noHol = computeRevival(days, "2026-08-25");
+  assert(!noHol.healed.has("2026-08-24") && noHol.ember !== null, "공휴일 미설정 → 월요일은 평일, quest 미달로 잔불");
+  const withHol = computeRevival(days, "2026-08-25", new Set(["2026-08-24"]));
+  assert(withHol.healed.has("2026-08-24"), "공휴일 설정 → 전부 rest → 브릿지로 복구");
+  assert(withHol.ember === null, "브릿지 복구 완료 → 잔불 없음");
+}
+
 // ── AC6: 빈 입력 안전 ──
 {
   const r = computeRevival([], "2026-08-24");

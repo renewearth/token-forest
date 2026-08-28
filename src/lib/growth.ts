@@ -1,4 +1,4 @@
-import { addBusinessDays, addDays, isWeekend } from "./date";
+import { DEFAULT_HOLIDAYS, addBusinessDays, addDays, isRestDay } from "./date";
 
 // 하루치 활동 재료(툴별 합산은 호출측에서 끝냄).
 export type GrowthDay = {
@@ -140,7 +140,11 @@ export type RevivalResult = {
 //   · C1 퀘스트: 그 외엔 유예창 내 자격 활동 2일로 복원(+품질일 있으면 보너스 GP)
 //   · C3 토큰: 위 실패 & 잔액>0이면 자동 1개 소모로 복원(최후 보루)
 // 치유된 결석일은 streak만 이어줄 뿐 GP는 소급하지 않는다(호출측이 GP 미가산).
-export function computeRevival(eligible: GrowthDay[], today: string): RevivalResult {
+export function computeRevival(
+  eligible: GrowthDay[],
+  today: string,
+  holidays: ReadonlySet<string> = DEFAULT_HOLIDAYS,
+): RevivalResult {
   const empty: RevivalResult = { healed: new Set(), bonusGp: 0, restoreTokens: 0, ember: null };
   if (eligible.length === 0) return empty;
 
@@ -168,8 +172,8 @@ export function computeRevival(eligible: GrowthDay[], today: string): RevivalRes
       // 결석 2일+ 만 끊김(단일 결석은 기존 규칙이 이미 브릿지).
       if (gapDays.length >= 2) {
         const breakDate = gapDays[gapDays.length - 1];
-        const graceEndsAt = addBusinessDays(breakDate, GRACE_BUSINESS_DAYS);
-        const allRest = gapDays.every(isWeekend);
+        const graceEndsAt = addBusinessDays(breakDate, GRACE_BUSINESS_DAYS, holidays);
+        const allRest = gapDays.every((d) => isRestDay(d, holidays));
         const needed = allRest ? BRIDGE_ATTENDANCE : REVIVAL_ATTENDANCE;
         const windowQual = eligible.filter(
           (d) => d.date >= cur && d.date <= graceEndsAt && qualifies.has(d.date),
@@ -207,9 +211,9 @@ export function computeRevival(eligible: GrowthDay[], today: string): RevivalRes
   for (let c = addDays(last, 1); c <= today; c = addDays(c, 1)) tail.push(c);
   if (tail.length >= 2) {
     const secondMiss = tail[1];
-    const graceEndsAt = addBusinessDays(secondMiss, GRACE_BUSINESS_DAYS);
+    const graceEndsAt = addBusinessDays(secondMiss, GRACE_BUSINESS_DAYS, holidays);
     if (graceEndsAt >= today) {
-      const allRest = tail.every(isWeekend);
+      const allRest = tail.every((d) => isRestDay(d, holidays));
       const length = streakEndingAt(new Set([...active, ...healed]), last, earliest);
       ember = {
         length,
@@ -310,6 +314,7 @@ export function computeGrowth(
   days: GrowthDay[],
   teamEpoch: string,
   today: string,
+  holidays: ReadonlySet<string> = DEFAULT_HOLIDAYS,
 ): GrowthState {
   const DORMANT: GrowthState = {
     gp: 0, level: 0, stage: "dormant", stageEmoji: "🌰", stageLabel: "부화 전 씨앗",
@@ -328,7 +333,7 @@ export function computeGrowth(
   const earliest = eligible[0].date;
 
   // 윈백(불씨 되살리기): 치유된 결석일은 streak 연속으로 취급 → 복구 시 배수도 복원.
-  const revival = computeRevival(eligible, today);
+  const revival = computeRevival(eligible, today, holidays);
   const activeOrHealed = revival.healed.size
     ? new Set([...active, ...revival.healed])
     : active;
