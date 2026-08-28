@@ -1163,6 +1163,11 @@ export async function getGrowthDays(
             $cond: [{ $in: ["$tool", EFFICIENCY_TOOLS] }, { $ifNull: ["$cacheCreationTokens", 0] }, 0],
           },
         },
+        requests: {
+          $sum: {
+            $cond: [{ $in: ["$tool", EFFICIENCY_TOOLS] }, { $ifNull: ["$requests", 0] }, 0],
+          },
+        },
       },
     },
     { $sort: { _id: 1 } },
@@ -1174,6 +1179,7 @@ export async function getGrowthDays(
     cacheRead: r.cacheRead as number,
     output: r.output as number,
     cacheCreation: r.cacheCreation as number,
+    requests: r.requests as number,
   }));
 }
 

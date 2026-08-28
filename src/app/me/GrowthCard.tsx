@@ -27,6 +27,11 @@ export default async function GrowthCard({ memberId }: { memberId: string }) {
   const fire =
     g.streakDays >= 3 ? `🔥${g.streakDays}` : g.idleDays >= 3 ? `💤${g.idleDays}` : null;
   const earned = new Set(g.milestones);
+  const ember = g.ember;
+  const emberHow =
+    ember?.kind === "bridge"
+      ? "영업일에 한 번만 활동하면 되살아나요"
+      : `자격 활동 ${ember?.have ?? 0}/${ember?.needed ?? 0}일이면 되살아나요`;
 
   return (
     <Card title="내 나무">
@@ -39,6 +44,14 @@ export default async function GrowthCard({ memberId }: { memberId: string }) {
             </h2>
             <span className="text-sm text-[var(--text-secondary)]">Lv{g.level}</span>
             {fire && <span className="text-sm">{fire}</span>}
+            {g.restoreTokens > 0 && (
+              <span
+                className="text-sm"
+                title={`복구 토큰 ${g.restoreTokens}개 — 끊긴 스트릭을 자동으로 되살립니다`}
+              >
+                🎟️{g.restoreTokens}
+              </span>
+            )}
           </div>
           <div className="mt-2 h-2 overflow-hidden rounded-full bg-[var(--surface-2)]">
             <div
@@ -52,6 +65,16 @@ export default async function GrowthCard({ memberId }: { memberId: string }) {
           </div>
         </div>
       </div>
+      {ember && (
+        <div className="mt-3 rounded-lg border border-[var(--accent-strong)] bg-[var(--surface-2)] px-3 py-2">
+          <p className="text-sm font-semibold text-[var(--accent-strong)]">
+            🟠 불씨가 남아 있어요 — 🔥{ember.length} 되살리기
+          </p>
+          <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
+            {emberHow} · <span className="font-medium">{ember.graceEndsAt}</span>까지
+          </p>
+        </div>
+      )}
       {g.nextMilestone && (
         <p className="mt-3 rounded-lg bg-[var(--surface-2)] px-3 py-2 text-sm text-[var(--accent-strong)]">
           다음 마일스톤: {g.nextMilestone.label}까지 {g.nextMilestone.remaining}
@@ -85,7 +108,8 @@ export default async function GrowthCard({ memberId }: { memberId: string }) {
             ))}
           </div>
           <p>활동한 날마다 10 GP × 스트릭 배수 + 효율 보너스(캐시 적중·멀티툴, 최대 +5).</p>
-          <p>주 1회 휴식은 스트릭이 유지됩니다.</p>
+          <p>주 1회 휴식은 스트릭이 유지됩니다. 끊겨도 <b>불씨</b>로 남아, 유예창(2 영업일) 안에
+            돌아오면 되살아납니다 — 주말 뒤 월요일 한 번이면 자동 연결(주말은 페널티 없음).</p>
           <p className="font-semibold text-[var(--accent-strong)]">
             토큰을 많이 쓴다고 나무가 크지 않습니다 — 꾸준함과 효율만 반영됩니다.
           </p>
