@@ -15,19 +15,42 @@ export function weekday(date: string): number {
   return new Date(`${date}T00:00:00Z`).getUTCDay();
 }
 
-// 주말(토·일) 여부. 공휴일 캘린더는 후속 과제 — 현재는 주말만 rest로 본다.
+// 주말(토·일) 여부.
 export function isWeekend(date: string): boolean {
   const d = weekday(date);
   return d === 0 || d === 6;
 }
 
-// `date`로부터 영업일(주말 제외) n일 뒤. n=0이면 그대로 반환.
-export function addBusinessDays(date: string, n: number): string {
+// 공휴일/전사 휴무일 — 주말과 동일하게 rest로 취급(스트릭 브릿지 대상). 배포별로
+// TOKEN_FOREST_HOLIDAYS(콤마 구분 YYYY-MM-DD)로 설정한다. 미설정이면 주말만 rest.
+// 불확실한 음력 공휴일을 코드에 하드코딩하지 않고 각 팀의 실제 달력·전사 휴무를
+// 넣게 하는 유지보수형 설계.
+export const DEFAULT_HOLIDAYS: ReadonlySet<string> = new Set(
+  (process.env.TOKEN_FOREST_HOLIDAYS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(s)),
+);
+
+// rest 여부 = 주말 또는 공휴일. holidays를 주입하면 테스트/커스텀 달력에 쓸 수 있다.
+export function isRestDay(
+  date: string,
+  holidays: ReadonlySet<string> = DEFAULT_HOLIDAYS,
+): boolean {
+  return isWeekend(date) || holidays.has(date);
+}
+
+// `date`로부터 영업일(주말·공휴일 제외) n일 뒤. n=0이면 그대로 반환.
+export function addBusinessDays(
+  date: string,
+  n: number,
+  holidays: ReadonlySet<string> = DEFAULT_HOLIDAYS,
+): string {
   let cur = date;
   let left = n;
   while (left > 0) {
     cur = addDays(cur, 1);
-    if (!isWeekend(cur)) left--;
+    if (!isRestDay(cur, holidays)) left--;
   }
   return cur;
 }
