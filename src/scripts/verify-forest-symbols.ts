@@ -23,8 +23,9 @@ assert(STAGE_LEGEND[0].emoji === "🌰" && STAGE_LEGEND[0].threshold === undefin
 const stageThr = STAGE_LEGEND.slice(1).map((s) => s.threshold as number);
 assert(stageThr.every((t, i) => i === 0 || t > stageThr[i - 1]), `단계 minGp 오름차순 (got ${stageThr})`);
 assert(
-  STATE_LEGEND.length === 2 && STATE_LEGEND.some((s) => s.emoji === "🔥") && STATE_LEGEND.some((s) => s.emoji === "💤"),
-  "상태 🔥·💤",
+  STATE_LEGEND.length === 4 &&
+    ["🔥", "🟠", "🎟️", "💤"].every((e) => STATE_LEGEND.some((s) => s.emoji === e)),
+  "상태 🔥·🟠·🎟️·💤",
 );
 assert(STREAK_CATALOG.length === 5, `STREAK_CATALOG 5 (got ${STREAK_CATALOG.length})`);
 const days = STREAK_CATALOG.map((s) => s.days).sort((a, b) => a - b);

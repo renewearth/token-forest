@@ -59,7 +59,7 @@ export const METRIC_INFO: Record<string, MetricInfo> = {
   },
   streak: {
     label: "스트릭",
-    meaning: "연속 활동일 (주 1회 휴식 허용).",
+    meaning: "연속 활동일. 주말·공휴일은 쉬어도 유지되고, 끊겨도 유예창 안에 돌아오면 되살아납니다.",
     target: "꾸준할수록 좋음 — 습관 정착의 신호.",
     trend: "up",
   },
