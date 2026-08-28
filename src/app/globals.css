@@ -150,6 +150,13 @@ body {
 /* 활력 — 정적(애니 없음): 감속모션서도 유지 */
 .fs-vital-dozing { opacity: 0.72; filter: grayscale(0.25); }
 .fs-vital-lively { filter: saturate(1.12) brightness(1.05); }
+/* 잔불(ember) — 끊겼지만 유예창 안에서 되살릴 수 있는 나무 밑동의 불씨 광채 */
+@keyframes fs-ember-flicker {
+  0%, 100% { opacity: 0.45; transform: translateX(-50%) scale(1); }
+  45% { opacity: 0.85; transform: translateX(-50%) scale(1.13); }
+  70% { opacity: 0.6; transform: translateX(-50%) scale(1.05); }
+}
+.fs-ember { animation: fs-ember-flicker 2.2s ease-in-out infinite; z-index: 0; }
 /* NOTE(2026-08-08): prefers-reduced-motion 가드를 의도적으로 제거함. 살아있는 숲의
    앰비언트 모션이 제품 핵심이라 팀 결정으로 항상 애니메이션. reduce-motion 선호를
    무시하므로 어지럼 민감 사용자엔 트레이드오프 — 되돌리려면 아래 규칙 복원:

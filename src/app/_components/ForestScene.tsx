@@ -113,6 +113,7 @@ export default async function ForestScene({ band }: { band?: TimeBand }) {
         const orns = ornamentsFor(t.g.milestones);
         const vv = vitalityView(t.g.vitality);
         const aura = orns.filter((o) => o.zone === "aura");
+        const ember = t.g.ember;
         return (
           <Link
             key={t.id}
@@ -122,6 +123,22 @@ export default async function ForestScene({ band }: { band?: TimeBand }) {
             style={{ left: `${p.xPct}%` }}
           >
             <span className={`relative block transition-transform hover:scale-110 ${vv.swayClass}`}>
+              {/* 잔불(ember) — 밑동에서 되살릴 수 있는 불씨. 나무 뒤(z-0). */}
+              {ember && (
+                <span
+                  aria-hidden
+                  className="fs-orn fs-ember"
+                  style={{
+                    left: "50%",
+                    bottom: 4,
+                    width: 52,
+                    height: 52,
+                    borderRadius: "50%",
+                    background:
+                      "radial-gradient(circle, rgba(226,102,42,0.62) 0%, rgba(240,163,58,0.32) 45%, transparent 70%)",
+                  }}
+                />
+              )}
               {/* 수관 광채(효율) — 나무 뒤 */}
               {aura.map((o, i) => (
                 <span
@@ -174,7 +191,11 @@ export default async function ForestScene({ band }: { band?: TimeBand }) {
               })}
               <span className={tagCls}>
                 {t.name} Lv{t.g.level}
-                {t.g.streakDays >= 3 ? ` 🔥${t.g.streakDays}` : ""}
+                {t.g.streakDays >= 3
+                  ? ` 🔥${t.g.streakDays}`
+                  : ember
+                    ? ` 🟠${ember.length}`
+                    : ""}
               </span>
             </span>
           </Link>
