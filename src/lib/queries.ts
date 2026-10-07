@@ -1,26 +1,46 @@
+import { emptyObservation, type Observation } from "@/lib/observation";
+import { buildMemberSeries } from "@/lib/member-series";
 import { Types } from "mongoose";
 import {
   connectDb,
+  Device,
   Digest,
   LimitSnapshot as LimitSnapshotModel,
   Member,
   SyncRun,
   UsageDaily,
+  UsageDailyLegacy,
   UsageHourly,
+  UsageSession,
   VISIBLE_MEMBER,
 } from "@/lib/db";
 import { canClaim } from "@/lib/claim";
-import { isoDaysAgo } from "@/lib/date";
-import { RATES, estimateWeight, isPremiumModel, rateFamily } from "@/lib/pricing";
+import { addDays, isoDaysAgo, kstDate, todayKst } from "@/lib/date";
+import { deviceHealthNotes } from "@/lib/device-health";
+// Pure display map (no React).
+import { toolLabel } from "@/app/_lib/ui";
+import {
+  CURSOR_PLACEHOLDER_MODELS,
+  estimateWeightWith,
+  isPremiumModel,
+  matchPrice,
+  priceFor,
+} from "@/lib/pricing";
+import { loadPriceTable } from "@/lib/price-table";
+import { type Unit, type UsageSelection } from "@/lib/units";
+import { projectUsage, groupUsage, type DisplayRow, type UsageFact } from "@/lib/usage-display";
 import type { GrowthDay } from "@/lib/growth";
 import { EMPTY_SUMS, addSums } from "@/lib/scorecard";
 import type { ScoreSums } from "@/lib/scorecard";
+import { DERIVED_MACHINE_ID } from "@/lib/sessions";
+import { applyReviewedCutovers } from "@/lib/collection-cutover-db";
 
-// Headline tokens per row = input + output. Cache tokens are excluded — they
+// Fixed legacy/scoring tokens per row = input + output. Display queries opt
+// into UsageSelection explicitly; do not change this shared scoring rule. Cache tokens are excluded — they
 // dwarf real usage by orders of magnitude and would drown the adoption signal;
 // the same definition is used by the Slack weekly report (src/lib/slack.ts).
-// Tools that report no tokens (e.g. Copilot) contribute 0 here; their activity
-// shows up in `requests` instead.
+// Tools that report no tokens contribute 0 here. Legacy Copilot poller billing
+// quantities are not model-call requests.
 export const TOKENS_EXPR = {
   $add: [{ $ifNull: ["$inputTokens", 0] }, { $ifNull: ["$outputTokens", 0] }],
 };
@@ -36,7 +56,13 @@ export const ACTIVE_USER_EXPR = {
   ],
 };
 
-const REQUESTS_EXPR = { $ifNull: ["$requests", 0] };
+export const REQUESTS_EXPR = {
+  $cond: [
+    { $and: [{ $eq: ["$tool", "copilot"] }, { $eq: ["$source", "poller"] }] },
+    0,
+    { $ifNull: ["$requests", 0] },
+  ],
+};
 
 export type DateRange = { from: string; to: string };
 
@@ -44,9 +70,47 @@ function inRange({ from, to }: DateRange) {
   return { date: { $gte: from, $lte: to } };
 }
 
+// Preserve field presence before display aggregation; prices use each source row's date/tool/model.
+// Explicit selection opts into display semantics; omitted selection preserves
+// old consumers (growth, maturity, reports). Never change TOKENS_EXPR globally.
+async function displayRows(
+  match: Record<string, unknown>, sel: UsageSelection,
+  source: "daily" | "hourly" | "sessions" | "legacy" = "daily",
+  unwindMachines = false,
+): Promise<DisplayRow[]> {
+  await connectDb();
+  const collection = source === "hourly" ? UsageHourly : source === "sessions" ? UsageSession
+    : source === "legacy" ? UsageDailyLegacy : UsageDaily;
+  const [rows, table] = await Promise.all([
+    collection.aggregate([
+      { $match: match },
+      ...(unwindMachines ? [{ $unwind: "$machineIds" }] : []),
+      { $project: { date: source === "hourly" ? { $substrBytes: ["$hour", 0, 10] } : "$date",
+        tool: 1, model: 1, memberId: 1, externalId: 1, source: 1, updatedAt: 1,
+        fieldEvidence: 1, dateBasis: 1, completeEvidence: 1,
+        machineId: unwindMachines ? "$machineIds" : "$machineId", hour: 1,
+        inputTokens: 1, outputTokens: 1, cacheReadTokens: 1, cacheCreationTokens: 1, requests: 1, sessions: 1,
+      } },
+      { $sort: { date: 1 } },
+    ]),
+    sel.unit === "raw" ? Promise.resolve({ entries: [] }) : loadPriceTable(),
+  ]);
+  const facts: UsageFact[] = rows.map((r) => ({
+    ...r, date: r.date, tool: r.tool, model: r.model ?? "",
+    memberId: r.memberId ? String(r.memberId) : "", externalId: r.externalId ?? "",
+    machineId: r.machineId ?? "", hour: r.hour ?? "",
+  }));
+  const selected = source === "daily" || source === "hourly"
+    ? await applyReviewedCutovers(facts, match, source === "daily" ? "day" : "hour") : facts;
+  return projectUsage(selected, table, sel);
+}
+
 // ---- Overview ---------------------------------------------------------------
 
 export type PeriodTotals = {
+  observation?: Observation;
+  observedRequests?: number | null;
+  unpricedTokens?: number;
   totalTokens: number;
   totalInput: number;
   totalOutput: number;
@@ -55,7 +119,13 @@ export type PeriodTotals = {
   toolCount: number;
 };
 
-export async function getPeriodTotals(range: DateRange): Promise<PeriodTotals> {
+export async function getPeriodTotals(range: DateRange, sel?: UsageSelection): Promise<PeriodTotals> {
+  if (sel) {
+    const g = groupUsage(await displayRows(inRange(range), sel), () => "all").get("all");
+    return { totalTokens: g?.tokens ?? 0, totalInput: g?.input ?? 0, totalOutput: g?.output ?? 0,
+      totalRequests: g?.requests ?? 0, observedRequests: g?.fields.requests ?? null, activeMembers: g?.users.size ?? 0, toolCount: g?.tools.size ?? 0,
+      unpricedTokens: g?.unpricedTokens ?? 0, observation: { ...(g?.observation ?? emptyObservation()), inProgress: range.from <= todayKst() && range.to >= todayKst() } };
+  }
   await connectDb();
   const [row] = await UsageDaily.aggregate([
     { $match: inRange(range) },
@@ -82,13 +152,19 @@ export async function getPeriodTotals(range: DateRange): Promise<PeriodTotals> {
 }
 
 export type ToolSummary = {
+  observation?: Observation;
+  collectedTokens?: number;
+  unpricedTokens?: number;
   tool: string;
   tokens: number;
   requests: number;
   activeMembers: number;
 };
 
-export async function getToolSummary(range: DateRange): Promise<ToolSummary[]> {
+export async function getToolSummary(range: DateRange, sel?: UsageSelection): Promise<ToolSummary[]> {
+  if (sel) return [...groupUsage(await displayRows(inRange(range), sel), (r) => r.tool)]
+    .map(([tool, g]) => ({ tool, observation: g.observation, tokens: g.tokens, requests: g.requests, activeMembers: g.users.size, unpricedTokens: g.unpricedTokens, collectedTokens: g.input + g.output + g.cacheRead + g.cacheCreation }))
+    .sort((a, b) => b.tokens - a.tokens || b.requests - a.requests || a.tool.localeCompare(b.tool));
   await connectDb();
   const rows = await UsageDaily.aggregate([
     { $match: inRange(range) },
@@ -137,16 +213,75 @@ export async function getDailyTokensByTool(
   );
 }
 
+// ---- unit-converted daily series (src/lib/units.ts) --------------------------
+
+// unpricedTokens = selected tokens of 단가 미정 rows in the range —
+// unpriced-only cells remain null and expose their original token subtotal.
+export type ConvertedDailySeries = { data: Array<Record<string, string | number | null>>; tools: string[]; unpricedTokens: number; observation?: Observation; observations?: Record<string, Record<string, Observation>> };
+
+// Daily chart values in any selected basis/unit, including raw.
+export async function getDailyConvertedByTool(
+  range: DateRange,
+  sel: { unit: Unit; ref: string | null; basis?: UsageSelection["basis"] },
+): Promise<ConvertedDailySeries> {
+  return buildToolSeries(await displayRows(inRange(range), { ...sel, basis: sel.basis ?? "all" }), range);
+}
+
+function buildToolSeries(rows: DisplayRow[], range: DateRange): ConvertedDailySeries {
+  const tools = [...new Set(rows.map((r) => r.tool))].sort();
+  const series = buildMemberSeries(rows.map((r) => ({ ...r, memberId: r.tool })), tools.map((tool) => ({ id: tool, name: tool })), range);
+  return { tools, data: series.data.map((day) => Object.fromEntries(Object.entries(day).map(([key, value]) => [key.startsWith("m") ? key.slice(1) : key, value]))),
+    observation: series.observation, unpricedTokens: series.observation.unpricedTokens,
+    observations: Object.fromEntries(Object.entries(series.observations).map(([date, states]) => [date, Object.fromEntries(Object.entries(states).map(([key, value]) => [key.startsWith("m") ? key.slice(1) : key, value]))])) };
+}
+
+// Read once: totals, member lines and tool lines share the exact source rows and prices.
+export async function getUsageObservationSnapshot(range: DateRange, sel: UsageSelection) {
+  await connectDb();
+  const [rows, members] = await Promise.all([displayRows(inRange(range), sel), Member.find(VISIBLE_MEMBER).select({ _id: 1, name: 1 }).lean()]);
+  const g = groupUsage(rows, () => "all").get("all");
+  const totals: PeriodTotals = { totalTokens: g?.tokens ?? 0, totalInput: g?.input ?? 0, totalOutput: g?.output ?? 0,
+    totalRequests: g?.requests ?? 0, observedRequests: g?.fields.requests ?? null, activeMembers: g?.users.size ?? 0, toolCount: g?.tools.size ?? 0,
+    unpricedTokens: g?.unpricedTokens ?? 0, observation: { ...(g?.observation ?? emptyObservation()), inProgress: range.from <= todayKst() && range.to >= todayKst() } };
+  return { totals, people: buildMemberSeries(rows, members.map((m) => ({ id: String(m._id), name: m.name })), range), tools: buildToolSeries(rows, range) };
+}
+
+// One query across all people; conversion happens before the member/date pivot.
+export async function getDailyConvertedByMember(range: DateRange, sel: UsageSelection) {
+  await connectDb();
+  const [rows, members] = await Promise.all([
+    displayRows(inRange(range), sel),
+    Member.find(VISIBLE_MEMBER).select({ _id: 1, name: 1 }).lean(),
+  ]);
+  return buildMemberSeries(rows, members.map((m) => ({ id: String(m._id), name: m.name })), range);
+}
+
+// One member's per-date value in another unit (usd / ref).
+export async function getMemberDailyConverted(
+  id: string,
+  range: DateRange,
+  sel: { unit: Unit; ref: string | null; basis?: UsageSelection["basis"] },
+): Promise<{ byDate: Map<string, number>; unpricedTokens: number; observationsByDate: Map<string, Observation>; sourceObservations: Array<{ date: string; tool: string; source: string; observation: Observation }> }> {
+  const rows = await displayRows({ memberId: oid(id), ...inRange(range) }, { ...sel, basis: sel.basis ?? "all" });
+  const groups = groupUsage(rows, (r) => r.date);
+  return { byDate: new Map([...groups].map(([date, group]) => [date, group.tokens])),
+    unpricedTokens: [...groups.values()].reduce((sum, group) => sum + group.unpricedTokens, 0),
+    observationsByDate: new Map([...groups].map(([date, group]) => [date, group.observation])),
+    // Keep source-row proofs scoped; they must not certify a whole member/date.
+    sourceObservations: rows.map((row) => ({ date: row.date, tool: row.tool, source: row.source ?? "", observation: row.observation })) };
+}
+
 export async function getDailyRequests(
   range: DateRange,
-): Promise<Array<{ date: string; requests: number }>> {
-  await connectDb();
-  const rows = await UsageDaily.aggregate([
-    { $match: inRange(range) },
-    { $group: { _id: "$date", requests: { $sum: REQUESTS_EXPR } } },
-    { $sort: { _id: 1 } },
-  ]);
-  return rows.map((r) => ({ date: r._id as string, requests: r.requests }));
+): Promise<Array<{ date: string; requests: number; observedRequests: number | null }>> {
+  const rows = await displayRows(inRange(range), { basis: "requests", unit: "raw", ref: null });
+  const groups = groupUsage(rows, (r) => r.date);
+  const days = [];
+  for (let date = range.from; date <= range.to; date = addDays(date, 1)) {
+    const value = groups.get(date)?.observation.value ?? null;
+    days.push({ date, requests: value ?? 0, observedRequests: value });
+  }
+  return days;
 }
 
 // Monday (YYYY-MM-DD) of the ISO week containing the given date — computed in
@@ -205,7 +340,7 @@ export async function getSyncFreshness(): Promise<SyncFreshness[]> {
     { $sort: { _id: -1 } },
     {
       $group: {
-        _id: "$tool",
+        _id: { $ifNull: ["$connectorTool", { $arrayElemAt: [{ $split: ["$tool", ":"] }, 0] }] },
         lastSyncedDate: { $first: "$lastSyncedDate" },
         status: { $first: "$status" },
         ranAt: { $first: "$ranAt" },
@@ -226,6 +361,9 @@ export async function getSyncFreshness(): Promise<SyncFreshness[]> {
 // ---- Members ----------------------------------------------------------------
 
 export type MemberListRow = {
+  observation?: Observation;
+  hasRecord?: boolean;
+  unpricedTokens?: number;
   id: string;
   name: string;
   email: string;
@@ -235,7 +373,19 @@ export type MemberListRow = {
   lastActive: string | null;
 };
 
-export async function getMemberList(): Promise<MemberListRow[]> {
+export async function getMemberList(sel?: UsageSelection, range?: DateRange): Promise<MemberListRow[]> {
+  if (sel) {
+    await connectDb();
+    const [members, rows] = await Promise.all([Member.find(VISIBLE_MEMBER).sort({ name: 1 }).lean(),
+      displayRows({ memberId: { $ne: null }, ...(range ? inRange(range) : {}) }, sel)]);
+    const groups = groupUsage(rows, (r) => r.memberId);
+    return members.map((m) => {
+      const g = groups.get(String(m._id));
+      return { id: String(m._id), name: m.name, email: m.email, tokens: g?.tokens ?? 0,
+        requests: g?.requests ?? 0, tools: [...(g?.tools ?? [])].sort(), lastActive: g?.lastDate ?? null,
+        unpricedTokens: g?.unpricedTokens ?? 0, observation: g?.observation ?? emptyObservation(), hasRecord: g?.observation.hasRecord ?? false };
+    }).sort((a, b) => a.id.localeCompare(b.id));
+  }
   await connectDb();
   const [membersList, usage] = await Promise.all([
     Member.find(VISIBLE_MEMBER).sort({ name: 1 }).lean(),
@@ -272,6 +422,7 @@ export async function getMemberList(): Promise<MemberListRow[]> {
 // Usage rows that never linked to a member — a missing identity mapping the
 // admin should notice and fix.
 export type UnmappedRow = {
+  unpricedTokens?: number;
   tool: string;
   externalId: string;
   tokens: number;
@@ -281,8 +432,14 @@ export type UnmappedRow = {
 };
 
 export async function getUnmappedExternalIds(
-  viewerEmail: string,
+  viewerEmail: string, sel?: UsageSelection,
 ): Promise<UnmappedRow[]> {
+  if (sel) return [...groupUsage(await displayRows({ memberId: null }, sel), (r) => JSON.stringify([r.tool, r.externalId]))]
+    .map(([key, g]) => {
+      const [tool, externalId] = JSON.parse(key) as [string, string];
+      return { tool, externalId, tokens: g.tokens, requests: g.requests, lastDate: g.lastDate,
+        claimable: canClaim(externalId, viewerEmail), unpricedTokens: g.unpricedTokens };
+    }).sort((a, b) => b.lastDate.localeCompare(a.lastDate));
   await connectDb();
   const rows = await UsageDaily.aggregate([
     { $match: { memberId: null } },
@@ -334,6 +491,11 @@ export async function getKnownTools(): Promise<string[]> {
 }
 
 export type MemberBreakdownRow = {
+  observation?: Observation;
+  fields?: import("@/lib/usage-display").UsageGroup["fields"];
+  cacheRead?: number;
+  cacheCreation?: number;
+  unpricedTokens?: number;
   tool: string;
   model: string;
   tokens: number;
@@ -342,10 +504,33 @@ export type MemberBreakdownRow = {
   requests: number;
 };
 
+function memberBreakdownFromRows(rows: DisplayRow[]): MemberBreakdownRow[] {
+  return [...groupUsage(rows, (r) => JSON.stringify([r.tool, r.model]))].map(([key, g]) => {
+    const [tool, model] = JSON.parse(key) as [string, string];
+    return { tool, model, observation: g.observation, fields: g.fields, tokens: g.tokens, input: g.input, output: g.output, cacheRead: g.cacheRead,
+      cacheCreation: g.cacheCreation, requests: g.requests, unpricedTokens: g.unpricedTokens };
+  }).sort((a, b) => a.tool.localeCompare(b.tool) || a.model.localeCompare(b.model));
+}
+function memberTrendFromRows(rows: DisplayRow[], range: DateRange) {
+  const groups = groupUsage(rows, (r) => r.date);
+  const days = [];
+  for (let date = range.from; date <= range.to; date = addDays(date, 1)) {
+    const g = groups.get(date);
+    days.push({ date, tokens: g?.tokens ?? 0, requests: g?.requests ?? 0, observedTokens: g?.observation.value ?? null, observedRequests: g?.fields.requests ?? null, unpricedTokens: g?.unpricedTokens ?? 0 });
+  }
+  return days;
+}
+export async function getMemberUsageObservationSnapshot(id: string, range: DateRange, sel: UsageSelection) {
+  const rows = await displayRows({ memberId: oid(id), ...inRange(range) }, sel);
+  return { breakdown: memberBreakdownFromRows(rows), trend: memberTrendFromRows(rows, range),
+    observation: { ...(groupUsage(rows, () => "all").get("all")?.observation ?? emptyObservation()), inProgress: range.from <= todayKst() && range.to >= todayKst() } };
+}
+
 export async function getMemberBreakdown(
   id: string,
-  range: DateRange,
+  range: DateRange, sel?: UsageSelection,
 ): Promise<MemberBreakdownRow[]> {
+  if (sel) return memberBreakdownFromRows(await displayRows({ memberId: oid(id), ...inRange(range) }, sel));
   await connectDb();
   const rows = await UsageDaily.aggregate([
     { $match: { memberId: oid(id), ...inRange(range) } },
@@ -372,8 +557,9 @@ export async function getMemberBreakdown(
 
 export async function getMemberDailyTrend(
   id: string,
-  range: DateRange,
-): Promise<Array<{ date: string; tokens: number; requests: number }>> {
+  range: DateRange, sel?: UsageSelection,
+): Promise<Array<{ date: string; tokens: number; requests: number; unpricedTokens?: number; observedTokens?: number | null; observedRequests?: number | null }>> {
+  if (sel) return memberTrendFromRows(await displayRows({ memberId: oid(id), ...inRange(range) }, sel), range);
   await connectDb();
   const rows = await UsageDaily.aggregate([
     { $match: { memberId: oid(id), ...inRange(range) } },
@@ -403,43 +589,162 @@ export async function getMemberTools(id: string): Promise<string[]> {
 // ---- per-machine collection status (for /me) --------------------------------
 
 export type MachineStatus = {
-  machineId: string;
-  lastDate: string;
+  unpricedTokens?: number;
+  machineId: string; // pseudonymous; never shown raw (deviceLabels → "기기 N")
+  label: string | null; // member's own device name (v2 uploader config) — /me only
+  lastSeenAt: string | null; // ISO; last landed v2 upload/heartbeat, null = legacy
+  lastDate: string; // latest usage date (KST); v2: in the 14-day window, else upload date
   recentTokens: number; // input+output, last 14 days
   recentRequests: number;
+  stale: boolean; // v2: lastSeenAt > 24h ago; legacy: lastDate before yesterday
+  format: "v2" | "legacy";
+  parserWarnings: string[]; // src/lib/device-health.ts rules (v2 only)
+  parserErrors: string[]; // "parser: error" — why a parser was skipped (v2 only)
 };
 
-// Which machines are uploading this member's Claude Code usage, and how
-// recently — lets a member confirm a newly installed machine is being counted.
-export async function getMyMachines(email: string): Promise<MachineStatus[]> {
+const DAY_MS = 24 * 60 * 60 * 1000;
+const STALE_MS = DAY_MS;
+
+// Which machines upload this member's usage, and how recently — lets a member
+// confirm a newly installed machine is counted and spot a machine that went
+// quiet. v2 = Device docs (src/lib/ingest.ts); per-device tokens come from
+// usagesessions by machineIds — a session replicated on several machines shows
+// on each (the member totals elsewhere count it once). legacy = machines seen
+// only in v1 uploader rows (usagedailies + the diverted usagedailylegacies
+// backup, any tool); the derived "sessions" rows are not a device. A machineId
+// present in both is listed once, as v2.
+export async function getMyMachines(
+  email: string,
+  now: Date = new Date(),
+  sel?: UsageSelection,
+): Promise<MachineStatus[]> {
   await connectDb();
-  const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)
-    .toISOString()
-    .slice(0, 10);
-  const rows = await UsageDaily.aggregate([
-    { $match: { tool: "claude_code", externalId: email } },
-    {
-      $group: {
-        _id: "$machineId",
-        lastDate: { $max: "$date" },
-        recentTokens: {
-          $sum: { $cond: [{ $gte: ["$date", since] }, TOKENS_EXPR, 0] },
-        },
-        recentRequests: {
-          $sum: {
-            $cond: [{ $gte: ["$date", since] }, { $ifNull: ["$requests", 0] }, 0],
+  const nowMs = now.getTime();
+  const since = kstDate(nowMs - 14 * DAY_MS);
+  const yesterday = addDays(kstDate(nowMs), -1);
+
+  const devices = await Device.find({ externalId: email }).lean();
+  const deviceIds = devices.map((d) => d.machineId);
+
+  type SessionAgg = { _id: string; lastDate: string; recentTokens: number; recentRequests: number };
+  const sessionAgg: SessionAgg[] =
+    deviceIds.length === 0
+      ? []
+      : await UsageSession.aggregate([
+          // 14-day window only (index externalId+machineIds+date): lastDate is
+          // the latest in-window session date, else the upload date below.
+          {
+            $match: {
+              externalId: email,
+              machineIds: { $in: deviceIds },
+              date: { $gte: since },
+            },
           },
-        },
+          { $unwind: "$machineIds" },
+          { $match: { machineIds: { $in: deviceIds } } },
+          {
+            $group: {
+              _id: "$machineIds",
+              lastDate: { $max: "$date" },
+              recentTokens: { $sum: TOKENS_EXPR },
+              recentRequests: { $sum: REQUESTS_EXPR },
+            },
+          },
+        ]);
+  const bySession = new Map(sessionAgg.map((r) => [r._id, r]));
+
+  const legacyPipeline = [
+    {
+      $match: {
+        externalId: email,
+        source: "uploader",
+        machineId: { $nin: [DERIVED_MACHINE_ID, ...deviceIds] },
       },
     },
-    { $sort: { lastDate: -1 } },
+    {
+      $group: {
+        _id: { $ifNull: ["$machineId", ""] },
+        lastDate: { $max: "$date" },
+        recentTokens: { $sum: { $cond: [{ $gte: ["$date", since] }, TOKENS_EXPR, 0] } },
+        recentRequests: { $sum: { $cond: [{ $gte: ["$date", since] }, REQUESTS_EXPR, 0] } },
+      },
+    },
+  ];
+  const [liveRows, divertedRows]: SessionAgg[][] = await Promise.all([
+    UsageDaily.aggregate(legacyPipeline),
+    UsageDailyLegacy.aggregate(legacyPipeline),
   ]);
-  return rows.map((r) => ({
-    machineId: (r._id as string) ?? "",
-    lastDate: r.lastDate,
-    recentTokens: r.recentTokens,
-    recentRequests: r.recentRequests,
-  }));
+  // A row lives in only one of the two collections (divert moves it), so the
+  // per-machine sums add.
+  const legacy = new Map<string, SessionAgg>();
+  for (const r of [...liveRows, ...divertedRows]) {
+    const cur = legacy.get(r._id);
+    legacy.set(
+      r._id,
+      cur
+        ? {
+            _id: r._id,
+            lastDate: cur.lastDate > r.lastDate ? cur.lastDate : r.lastDate,
+            recentTokens: cur.recentTokens + r.recentTokens,
+            recentRequests: cur.recentRequests + r.recentRequests,
+          }
+        : r,
+    );
+  }
+
+  const out: MachineStatus[] = devices.map((d) => {
+    const s = bySession.get(d.machineId);
+    const seen = new Date(d.lastSeenAt).getTime();
+    const notes = deviceHealthNotes(d.health ?? [], d.healthHistory ?? [], toolLabel);
+    return {
+      machineId: d.machineId,
+      label: d.label ?? null,
+      lastSeenAt: new Date(seen).toISOString(),
+      lastDate: s?.lastDate ?? kstDate(seen),
+      recentTokens: s?.recentTokens ?? 0,
+      recentRequests: s?.recentRequests ?? 0,
+      stale: nowMs - seen > STALE_MS,
+      format: "v2",
+      parserWarnings: notes.warnings,
+      parserErrors: notes.errors,
+    };
+  });
+  for (const r of legacy.values()) {
+    out.push({
+      machineId: r._id,
+      label: null,
+      lastSeenAt: null,
+      lastDate: r.lastDate,
+      recentTokens: r.recentTokens,
+      recentRequests: r.recentRequests,
+      stale: r.lastDate < yesterday,
+      format: "legacy",
+      parserWarnings: [],
+      parserErrors: [],
+    });
+  }
+  if (sel) {
+    // Same overlap semantics as the fixed raw query: shared sessions appear
+    // on every contributing device, while member totals count them once.
+    const legacyMatch = { externalId: email, source: "uploader",
+      machineId: { $nin: [DERIVED_MACHINE_ID, ...deviceIds] }, date: { $gte: since } };
+    const [sessions, live, diverted] = await Promise.all([
+      deviceIds.length ? displayRows({ externalId: email, machineIds: { $in: deviceIds }, date: { $gte: since } }, sel, "sessions", true) : [],
+      displayRows(legacyMatch, sel), displayRows(legacyMatch, sel, "legacy"),
+    ]);
+    const groups = groupUsage([...sessions.filter((r) => deviceIds.includes(r.machineId)), ...live, ...diverted], (r) => r.machineId);
+    for (const m of out) {
+      m.recentTokens = groups.get(m.machineId)?.tokens ?? 0;
+      m.unpricedTokens = groups.get(m.machineId)?.unpricedTokens ?? 0;
+    }
+  }
+  // Most recent first; on the same date v2 (exact upload time) before legacy.
+  return out.sort(
+    (a, b) =>
+      b.lastDate.localeCompare(a.lastDate) ||
+      (b.lastSeenAt ?? "").localeCompare(a.lastSeenAt ?? "") ||
+      a.machineId.localeCompare(b.machineId),
+  );
 }
 
 // ---- plan-limit snapshots (own collection; per member + Claude account) -----
@@ -502,6 +807,9 @@ export async function getLatestLimits(
 // ---- analytics: leaderboard / heatmap / model share / WoW -------------------
 
 export type LeaderboardRow = {
+  observation?: Observation;
+  hasRecord?: boolean;
+  unpricedTokens?: number;
   memberId: string;
   name: string;
   email: string;
@@ -518,18 +826,33 @@ export type LeaderboardRow = {
 // Token/request ranking of linked members, with a per-tool token breakdown so
 // the bar can stack by tool. Unlinked usage (memberId null) is excluded — an
 // unattributed row has no member to rank. The model dimension is kept in the
-// pipeline solely to price each slice; pricing lives in JS, not the DB.
+// pipeline solely to price each slice (and the date, to pick the price
+// version in effect that day); prices come from the modelprices table and are
+// applied in JS. Unpriced models (단가 미정) weigh 0.
 export async function getMemberLeaderboard(
-  range: DateRange,
+  range: DateRange, sel?: UsageSelection,
 ): Promise<LeaderboardRow[]> {
+  if (sel) {
+    await connectDb();
+    const [members, rows] = await Promise.all([Member.find(VISIBLE_MEMBER).lean(), displayRows({ memberId: { $ne: null }, ...inRange(range) }, sel)]);
+    const groups = groupUsage(rows, (r) => r.memberId);
+    const toolGroups = groupUsage(rows, (r) => JSON.stringify([r.memberId, r.tool]));
+    return members.map((m) => {
+      const memberId = String(m._id), g = groups.get(memberId);
+      const byTool = Object.fromEntries([...(g?.tools ?? [])].map((tool) => [tool, toolGroups.get(JSON.stringify([memberId, tool]))?.tokens ?? 0]));
+      return { memberId, name: m.name, email: m.email, tokens: g?.tokens ?? 0, requests: g?.requests ?? 0,
+        byTool, weightedShare: 0, byToolShare: {}, unpricedTokens: g?.unpricedTokens ?? 0,
+        observation: g?.observation ?? emptyObservation(), hasRecord: g?.observation.hasRecord ?? false };
+    }).sort((a, b) => a.memberId.localeCompare(b.memberId));
+  }
   await connectDb();
-  const [members, usage] = await Promise.all([
+  const [members, usage, prices] = await Promise.all([
     Member.find().lean(),
     UsageDaily.aggregate([
       { $match: { memberId: { $ne: null }, ...inRange(range) } },
       {
         $group: {
-          _id: { memberId: "$memberId", tool: "$tool", model: "$model" },
+          _id: { memberId: "$memberId", tool: "$tool", model: "$model", date: "$date" },
           tokens: { $sum: TOKENS_EXPR },
           requests: { $sum: REQUESTS_EXPR },
           inputTokens: { $sum: { $ifNull: ["$inputTokens", 0] } },
@@ -541,6 +864,7 @@ export async function getMemberLeaderboard(
         },
       },
     ]),
+    loadPriceTable(),
   ]);
   const byMember = new Map<
     string,
@@ -562,7 +886,12 @@ export async function getMemberLeaderboard(
       );
     }
     const tool = u._id.tool;
-    const weight = estimateWeight({ ...u, tool, model: u._id.model });
+    const { usd: weight } = estimateWeightWith(prices, {
+      ...u,
+      tool,
+      model: u._id.model,
+      date: u._id.date,
+    });
     agg.tokens += u.tokens;
     agg.requests += u.requests;
     agg.weight += weight;
@@ -597,8 +926,19 @@ export async function getMemberLeaderboard(
 // dow/hour are bucketed in JS (tiny data). Scoped to one member when given.
 export async function getHourlyHeatmap(
   range: DateRange,
-  memberId?: string,
-): Promise<number[][]> {
+  memberId?: string, sel?: UsageSelection,
+): Promise<Array<Array<number | null>>> {
+  if (sel) {
+    const match = { hour: { $gte: `${range.from}T00`, $lte: `${range.to}T23` }, ...(memberId ? { memberId: oid(memberId) } : {}) };
+    const rows = await displayRows(match, sel, "hourly");
+    const matrix = Array.from({ length: 7 }, () => new Array<number | null>(24).fill(null));
+    for (const r of rows) {
+      const d = new Date(`${r.hour}:00:00Z`);
+      const day = (d.getUTCDay() + 6) % 7, hour = d.getUTCHours();
+      if (r.observation.value !== null) matrix[day][hour] = (matrix[day][hour] ?? 0) + r.observation.value;
+    }
+    return matrix;
+  }
   await connectDb();
   const match: Record<string, unknown> = {
     hour: { $gte: `${range.from}T00`, $lte: `${range.to}T23` },
@@ -618,14 +958,18 @@ export async function getHourlyHeatmap(
   return matrix;
 }
 
-export type ModelDistRow = { model: string; tool: string; tokens: number };
+export type ModelDistRow = { model: string; tool: string; tokens: number; unpricedTokens?: number; observation?: Observation };
 
 // Token share per (tool, model), positive totals only, largest first — feeds
 // the model-mix donut. Scoped to one member when given.
 export async function getModelDistribution(
   range: DateRange,
-  memberId?: string,
+  memberId?: string, sel?: UsageSelection,
 ): Promise<ModelDistRow[]> {
+  if (sel) return [...groupUsage(await displayRows({ ...inRange(range), ...(memberId ? { memberId: oid(memberId) } : {}) }, sel), (r) => JSON.stringify([r.tool, r.model]))]
+    .map(([key, g]) => { const [tool, model] = JSON.parse(key) as [string, string];
+      return { tool, model, tokens: g.tokens, unpricedTokens: g.unpricedTokens, observation: g.observation }; })
+    .filter((r) => r.tokens > 0 || r.unpricedTokens > 0).sort((a, b) => b.tokens - a.tokens);
   await connectDb();
   const match: Record<string, unknown> = { ...inRange(range) };
   if (memberId) match.memberId = oid(memberId);
@@ -648,6 +992,10 @@ export async function getModelDistribution(
 }
 
 export type WowRow = {
+  observation?: Observation;
+  previousObservation?: Observation;
+  unpricedTokens?: number;
+  prevUnpricedTokens?: number;
   memberId: string;
   name: string;
   tokens: number; // trailing 7 full days
@@ -658,15 +1006,30 @@ export type WowRow = {
 // Per-member token change: trailing 7 full days vs the prior 7. Window math
 // mirrors the Slack weekly report (src/lib/slack.ts): [today-7, today) vs
 // [today-14, today-7), both half-open. Linked members only.
-export async function getMemberWowDeltas(): Promise<WowRow[]> {
+export async function getMemberWowDeltas(sel?: UsageSelection): Promise<WowRow[]> {
+  if (sel) {
+    await connectDb();
+    const today = isoDaysAgo(0), weekAgo = isoDaysAgo(7), twoWeeksAgo = isoDaysAgo(14);
+    const [members, rows] = await Promise.all([Member.find(VISIBLE_MEMBER).lean(),
+      displayRows({ memberId: { $ne: null }, date: { $gte: twoWeeksAgo, $lt: today } }, sel)]);
+    const current = groupUsage(rows.filter((r) => r.date >= weekAgo), (r) => r.memberId);
+    const previous = groupUsage(rows.filter((r) => r.date < weekAgo), (r) => r.memberId);
+    return members.map((m) => {
+      const memberId = String(m._id), c = current.get(memberId), p = previous.get(memberId);
+      return { memberId, name: m.name, tokens: c?.tokens ?? 0, prevTokens: p?.tokens ?? 0, pct: null,
+        observation: c?.observation ?? emptyObservation(), previousObservation: p?.observation ?? emptyObservation(),
+        unpricedTokens: c?.unpricedTokens ?? 0, prevUnpricedTokens: p?.unpricedTokens ?? 0 };
+    }).sort((a, b) => a.memberId.localeCompare(b.memberId));
+  }
+
   await connectDb();
   const today = isoDaysAgo(0);
   const weekAgo = isoDaysAgo(7);
   const twoWeeksAgo = isoDaysAgo(14);
   const [members, current, previous] = await Promise.all([
     Member.find().lean(),
-    memberTokensInWindow(weekAgo, today),
-    memberTokensInWindow(twoWeeksAgo, weekAgo),
+    memberTokensInWindow(weekAgo, today, sel),
+    memberTokensInWindow(twoWeeksAgo, weekAgo, sel),
   ]);
   const ids = new Set([...current.keys(), ...previous.keys()]);
   const memberById = new Map(members.map((m) => [String(m._id), m]));
@@ -690,8 +1053,10 @@ export async function getMemberWowDeltas(): Promise<WowRow[]> {
 // memberId -> summed tokens over [fromDate, toDateExclusive), linked only.
 async function memberTokensInWindow(
   fromDate: string,
-  toDateExclusive: string,
+  toDateExclusive: string, sel?: UsageSelection,
 ): Promise<Map<string, number>> {
+  if (sel) return new Map([...groupUsage(await displayRows({ memberId: { $ne: null }, date: { $gte: fromDate, $lt: toDateExclusive } }, sel), (r) => r.memberId)]
+    .map(([id, g]) => [id, g.tokens]));
   const rows = await UsageDaily.aggregate([
     {
       $match: {
@@ -755,7 +1120,7 @@ export type MatrixRow = { memberId: string; name: string; cells: MatrixCell[] };
 
 // Display order for tools we know about; anything else seen in the data is
 // appended after these, alphabetically.
-const MATRIX_TOOL_ORDER = ["cursor", "claude_code", "codex", "gemini", "grok", "copilot"];
+const MATRIX_TOOL_ORDER = ["cursor", "claude_code", "codex", "gemini", "grok", "opencode", "copilot"];
 
 // member × tool grid of last-usage dates — whole history, not range-bound,
 // because the question is "언제 마지막으로 썼나". Registered members with no
@@ -835,28 +1200,39 @@ export async function getInactiveMembers(days = 7): Promise<InactiveMember[]> {
 
 export type TierWeek = { week: string } & Record<string, number | string>;
 
-// Weekly token (input+output) share % per pricing family (fable/opus/…).
+export const UNPRICED_FAMILY = "단가 미정";
+
+// Weekly token (input+output) share % per pricing family (fable/opus/…) —
+// the family of the modelprices entry in effect that day; models with no
+// price fall into UNPRICED_FAMILY.
 // Weeks whose token total is 0 are skipped — a share of nothing isn't a
 // data point. families is sorted by whole-range token sum, descending, so
 // stacked-area layers keep a stable, biggest-first order.
 export async function getModelTierTrend(
-  range: DateRange,
+  range: DateRange, sel?: UsageSelection,
 ): Promise<{ weeks: TierWeek[]; families: string[] }> {
   await connectDb();
-  const rows = await UsageDaily.aggregate([
-    { $match: inRange(range) },
-    {
-      $group: {
-        _id: { date: "$date", tool: "$tool", model: "$model" },
-        tokens: { $sum: TOKENS_EXPR },
+  const [rows, prices] = await Promise.all([
+    sel ? displayRows(inRange(range), sel).then((rows) => rows.map((r) => ({
+      _id: { date: r.date, tool: r.tool, model: r.model }, tokens: r.tokens,
+    }))) : UsageDaily.aggregate([
+      { $match: inRange(range) },
+      {
+        $group: {
+          _id: { date: "$date", tool: "$tool", model: "$model" },
+          tokens: { $sum: TOKENS_EXPR },
+        },
       },
-    },
+    ]),
+    loadPriceTable(),
   ]);
   const byWeek = new Map<string, Map<string, number>>();
   const familyTotals = new Map<string, number>();
   for (const r of rows) {
     if (r.tokens <= 0) continue;
-    const family = rateFamily(String(r._id.model ?? ""), r._id.tool);
+    const family =
+      matchPrice(prices, String(r._id.model ?? ""), r._id.tool, r._id.date)?.family ??
+      UNPRICED_FAMILY;
     const week = mondayOf(r._id.date);
     let byFamily = byWeek.get(week);
     if (!byFamily) byWeek.set(week, (byFamily = new Map()));
@@ -1204,7 +1580,7 @@ export async function getScorecardSums(range: DateRange): Promise<ScorecardMembe
         output: { $sum: { $ifNull: ["$outputTokens", 0] } },
         cacheRead: { $sum: { $ifNull: ["$cacheReadTokens", 0] } },
         cacheCreation: { $sum: { $ifNull: ["$cacheCreationTokens", 0] } },
-        requests: { $sum: { $ifNull: ["$requests", 0] } },
+        requests: { $sum: REQUESTS_EXPR },
         sessions: { $sum: { $ifNull: ["$sessions", 0] } },
         models: { $addToSet: "$model" },
       },
@@ -1235,7 +1611,7 @@ export async function getScorecardWeeklySums(range: DateRange): Promise<Scorecar
         output: { $sum: { $ifNull: ["$outputTokens", 0] } },
         cacheRead: { $sum: { $ifNull: ["$cacheReadTokens", 0] } },
         cacheCreation: { $sum: { $ifNull: ["$cacheCreationTokens", 0] } },
-        requests: { $sum: { $ifNull: ["$requests", 0] } },
+        requests: { $sum: REQUESTS_EXPR },
         sessions: { $sum: { $ifNull: ["$sessions", 0] } },
       },
     },
@@ -1314,31 +1690,35 @@ export async function getModelBreadthWeekly(range: DateRange): Promise<ModelBrea
   return [...acc.values()];
 }
 
-// A2 캐시 절감 — (tool,model) 합산에 단가 적용해 saved/spent 가중치 산출.
+// A2 캐시 절감 — (tool,model,date) 합산에 그날 단가 적용해 saved/spent 가중치 산출.
+// 단가 미정 모델은 양쪽 모두 0 (추정 단가로 채우지 않는다).
 export async function getCacheSavings(range: DateRange): Promise<{ saved: number; spent: number }> {
   await connectDb();
-  const rows = await UsageDaily.aggregate([
-    { $match: { date: { $gte: range.from, $lte: range.to } } },
-    {
-      $group: {
-        _id: { tool: "$tool", model: "$model" },
-        input: { $sum: { $ifNull: ["$inputTokens", 0] } },
-        output: { $sum: { $ifNull: ["$outputTokens", 0] } },
-        cacheRead: { $sum: { $ifNull: ["$cacheReadTokens", 0] } },
-        cacheCreation: { $sum: { $ifNull: ["$cacheCreationTokens", 0] } },
+  const [rows, prices] = await Promise.all([
+    UsageDaily.aggregate([
+      { $match: { date: { $gte: range.from, $lte: range.to } } },
+      {
+        $group: {
+          _id: { tool: "$tool", model: "$model", date: "$date" },
+          input: { $sum: { $ifNull: ["$inputTokens", 0] } },
+          output: { $sum: { $ifNull: ["$outputTokens", 0] } },
+          cacheRead: { $sum: { $ifNull: ["$cacheReadTokens", 0] } },
+          cacheCreation: { $sum: { $ifNull: ["$cacheCreationTokens", 0] } },
+        },
       },
-    },
+    ]),
+    loadPriceTable(),
   ]);
   let saved = 0;
   let spent = 0;
   for (const r of rows) {
-    const rate = rateFamily(r._id.model, r._id.tool);
-    spent += estimateWeight({
-      model: r._id.model, tool: r._id.tool,
+    spent += estimateWeightWith(prices, {
+      model: r._id.model, tool: r._id.tool, date: r._id.date,
       inputTokens: r.input, outputTokens: r.output,
       cacheReadTokens: r.cacheRead, cacheCreationTokens: r.cacheCreation,
-    });
-    saved += (r.cacheRead / 1_000_000) * (RATES[rate].input - RATES[rate].cacheRead);
+    }).usd;
+    const rate = priceFor(prices, r._id.model, r._id.tool, r._id.date);
+    if (rate) saved += (r.cacheRead / 1_000_000) * (rate.input - rate.cacheRead);
   }
   return { saved, spent };
 }
@@ -1349,7 +1729,9 @@ export type ModelAdoptionRow = { model: string; globalFirst: string; memberFirst
 // Cursor's mode/tier placeholders — not real model names — so they shouldn't
 // count as "신모델 채택" (model adoption). Exact match (case-insensitive),
 // not substring: real model families like "composer-1" must stay countable.
-const NON_MODEL_NAMES = new Set(["default", "premium", "auto", "unknown", "composer"]);
+// Same placeholder list the price table's cursor-default entry matches
+// (CURSOR_PLACEHOLDER_MODELS), plus bare "composer" (a Cursor mode here).
+const NON_MODEL_NAMES = new Set<string>([...CURSOR_PLACEHOLDER_MODELS, "composer"]);
 
 export async function getModelAdoption(sinceDays = 120): Promise<ModelAdoptionRow[]> {
   await connectDb();

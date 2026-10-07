@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { UsageLink as Link } from "@/app/_components/UsageLink";
 import { Types } from "mongoose";
 import { connectDb, UsageDaily } from "@/lib/db";
 import { getViewer } from "@/lib/auth";

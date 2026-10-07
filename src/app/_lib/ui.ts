@@ -9,16 +9,14 @@ const TOOL_LABELS: Record<string, string> = {
   copilot: "GitHub Copilot",
   anthropic: "Anthropic",
   gemini: "Gemini",
+  gemini_workspace: "Gemini Workspace",
   grok: "Grok",
+  opencode: "OpenCode",
 };
 
 export function toolLabel(tool: string): string {
   return TOOL_LABELS[tool] ?? tool;
 }
-
-// Tools that report request counts but no token totals. Surfaced in the UI so
-// "0 tokens" is never read as "no usage".
-export const REQUESTS_ONLY_TOOLS = new Set(["copilot"]);
 
 // Deterministic tool -> categorical slot (1..8). Fixed for the known tools so a
 // tool keeps its color regardless of which others are present; unknown tools
@@ -31,6 +29,7 @@ const KNOWN_SLOTS: Record<string, number> = {
   anthropic: 5,
   gemini: 6,
   grok: 3,
+  opencode: 8,
 };
 
 export function toolSlot(tool: string): number {
@@ -75,6 +74,21 @@ export function formatCompact(n: number, style: NumStyle = "kr"): string {
   if (abs < 100_000_000) return `${trimKr(n / 10_000)}만`;
   if (abs < 1_000_000_000_000) return `${trimKr(n / 100_000_000)}억`;
   return `${trimKr(n / 1_000_000_000_000)}조`;
+}
+
+// API-list-price dollars (unit "usd"). Small values keep cents — a day of
+// light use is well under $1.
+//   formatUsd:        $0.42 / $12.30 / $1,284
+//   formatUsdCompact: $0.4 / $12 / $1.3K / $54.9M   (axis ticks)
+export function formatUsd(n: number): string {
+  return Math.abs(n) < 100 ? `$${n.toFixed(2)}` : `$${formatNumber(n)}`;
+}
+
+export function formatUsdCompact(n: number): string {
+  const abs = Math.abs(n);
+  if (abs < 10) return `$${trim(n)}`;
+  if (abs < 1000) return `$${Math.round(n)}`;
+  return `$${formatCompact(n, "west")}`;
 }
 
 function trim(n: number): string {

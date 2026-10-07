@@ -1,7 +1,9 @@
 // Next.js instrumentation hook: starts the in-process schedulers when the
 // server boots (dev and standalone/production alike).
 export async function register() {
-  if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  // Keep Node-only imports inside the runtime branch so the Edge compiler
+  // can remove this code, including when schedules are disabled.
+  if (process.env.NEXT_RUNTIME === "nodejs") {
   if (process.env.TOKEN_FOREST_DISABLE_CRON === "1") return;
 
   // Dev hot reload can re-run this module; never double-register the jobs.
@@ -36,4 +38,5 @@ export async function register() {
   );
 
   console.log("[cron] schedulers registered (sync hourly, slack Mon 09:30 KST)");
+  }
 }

@@ -3,6 +3,7 @@ import { connectDb, Member } from "@/lib/db";
 import { computeGrowth } from "@/lib/growth";
 import { getGrowthDays, getMyMachines, getLatestLimits } from "@/lib/queries";
 import { isoDaysAgo, todayKst, teamEpoch } from "@/lib/date";
+import { organizationLabels } from "@/lib/limit-window";
 
 export const dynamic = "force-dynamic";
 
@@ -36,16 +37,28 @@ export async function GET(req: NextRequest) {
   const recent = days.filter((d) => d.date >= since7);
   const tools7d = new Set(recent.flatMap((d) => d.tools)).size;
 
+  const orgLabels = organizationLabels(
+    limits.map((l) => l.organization),
+    machines.map((m) => m.machineId),
+  );
+
   return NextResponse.json({
     member: member.name,
     onboardedAt: onboarded,
     latestDate: days.length ? days[days.length - 1].date : null,
+    // v2 devices + legacy uploader machines (any tool). lastSeenAt/stale are
+    // additive — existing menu-bar clients read only machineId/lastActive.
     machines: machines.map((m) => ({
       machineId: m.machineId,
       lastActive: m.lastDate,
+      lastSeenAt: m.lastSeenAt,
+      stale: m.stale,
     })),
     limits: limits.map((l) => ({
-      account: l.organization || l.accountEmail,
+      // Codex rows are per device ("device:…" org): account + "기기 N".
+      account: /^device:/.test(l.organization)
+        ? `${l.accountEmail} · ${orgLabels.get(l.organization)}`
+        : l.organization || l.accountEmail,
       window: l.window,
       utilizationPct: l.utilizationPct,
       resetsAt: l.resetsAt,

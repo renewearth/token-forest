@@ -20,7 +20,10 @@ export default function PostBody({ markdown, anchorId }: { markdown: string; anc
 
   // 딥링크(`/knowhow#<id>`)로 들어오면 해당 글을 펼친 채로 보여준다.
   useEffect(() => {
-    if (anchorId && window.location.hash === `#${anchorId}`) setCollapsed(false);
+    const reveal = () => { if (anchorId && window.location.hash === `#${anchorId}`) setCollapsed(false); };
+    const frame = requestAnimationFrame(reveal);
+    window.addEventListener("hashchange", reveal);
+    return () => { cancelAnimationFrame(frame); window.removeEventListener("hashchange", reveal); };
   }, [anchorId]);
 
   const clamp = overflow && collapsed;

@@ -23,7 +23,8 @@ const T = 1786636800;
   eq("tool", rows[0].tool, "grok");
   eq("input = sum prompt_tokens", rows[0].inputTokens, 150);
   eq("output = sum completion_tokens", rows[0].outputTokens, 15);
-  eq("no cache metric", rows[0].cacheReadTokens, 0);
+  eq("no cache metric", rows[0].cacheReadTokens, null);
+  eq("cache unsupported", rows[0].fieldEvidence.cacheReadTokens, "unsupported");
   eq("requests = call count", rows[0].requests, 2);
   eq("sessions unknown -> null", rows[0].sessions, null);
   eq("source", rows[0].source, "uploader");
@@ -56,10 +57,12 @@ const T = 1786636800;
   eq("since filter keeps newer", rows[0].date, "2026-08-14");
 }
 
-// 6. Zero-token line contributes nothing.
+// 6. The wrapper records a real call even when the usage is explicitly zero.
 {
   const { rows } = assembleRows([line(T, "grok-4-fast", 0, 0)]);
-  eq("zero-token line -> no row", rows.length, 0);
+  eq("zero-token call -> row", rows.length, 1);
+  eq("zero-token call -> known zero", rows[0].inputTokens, 0);
+  eq("zero-token call -> one request", rows[0].requests, 1);
 }
 
 // 7. Hourly mirror keeps hours distinct.

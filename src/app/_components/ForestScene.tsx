@@ -1,5 +1,5 @@
 // src/app/_components/ForestScene.tsx
-import Link from "next/link";
+import { UsageLink as Link } from "@/app/_components/UsageLink";
 import { connectDb, Member, VISIBLE_MEMBER } from "@/lib/db";
 import { getGrowthDays } from "@/lib/queries";
 import { computeGrowth } from "@/lib/growth";

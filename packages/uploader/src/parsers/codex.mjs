@@ -15,16 +15,14 @@ import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { deviceTag } from "../lib/device-id.mjs";
 import { kstDate, kstHour } from "../lib/kst.mjs";
+import { addMetric, bucketEvents, emptyMetrics, fileStem, makeHealth } from "../lib/sessions.mjs";
 
 export const tool = "codex";
 
-function num(v) {
-  return typeof v === "number" && Number.isFinite(v) ? v : 0;
-}
-
 // Fold ONE rollout file's parsed JSON lines into a flat list of delta events:
-//   { date, hour, model, inputTokens, cacheReadTokens, outputTokens, cacheCreationTokens }
+//   { date, hour, ts, model, inputTokens, cacheReadTokens, outputTokens, cacheCreationTokens }
 // One event per counted (non-zero) cumulative delta. Pure — no I/O.
 export function foldSession(lines) {
   let model = "";
@@ -44,37 +42,37 @@ export function foldSession(lines) {
     const parsed = new Date(ts);
     if (Number.isNaN(parsed.getTime())) continue;
 
-    const totInput = num(info.input_tokens);
-    const totCached = num(info.cached_input_tokens);
-    const totOutput = num(info.output_tokens);
+    const token = (v) => Number.isSafeInteger(v) && v >= 0 ? v : null;
+    const totInput = token(info.input_tokens);
+    const totCached = token(info.cached_input_tokens);
+    const totOutput = token(info.output_tokens);
 
-    // Reset detection is PER-FIELD and independent: a field dropping below its
-    // own baseline rebaselines only that field to 0. Fields are coerced to 0
-    // when absent (see `num`), so a snapshot that simply omits one field (e.g.
-    // no cached_input_tokens) must not force a full-total rebaseline — that
-    // would re-count everything already attributed and double-count.
-    const baseInput = !started || totInput < prev.input ? 0 : prev.input;
-    const baseCached = !started || totCached < prev.cached ? 0 : prev.cached;
-    const baseOutput = !started || totOutput < prev.output ? 0 : prev.output;
+    // Reset detection is per field. An omitted field stays unknown and leaves
+    // its baseline untouched, so a later snapshot cannot recount old usage.
+    const baseInput = !started || (totInput !== null && totInput < prev.input) ? 0 : prev.input;
+    const baseCached = !started || (totCached !== null && totCached < prev.cached) ? 0 : prev.cached;
+    const baseOutput = !started || (totOutput !== null && totOutput < prev.output) ? 0 : prev.output;
     started = true;
 
-    const dInput = totInput - baseInput;
-    const dCached = totCached - baseCached;
-    const dOutput = totOutput - baseOutput;
-    prev.input = totInput;
-    prev.cached = totCached;
-    prev.output = totOutput;
+    const dInput = totInput === null ? null : totInput - baseInput;
+    const dCached = totCached === null ? null : totCached - baseCached;
+    const dOutput = totOutput === null ? null : totOutput - baseOutput;
+    if (totInput !== null) prev.input = totInput;
+    if (totCached !== null) prev.cached = totCached;
+    if (totOutput !== null) prev.output = totOutput;
 
-    if (dInput === 0 && dCached === 0 && dOutput === 0) continue;
+    if ([dInput, dCached, dOutput].every((v) => v === 0 || v === null)) continue;
 
     events.push({
       date: kstDate(ts),
       hour: kstHour(ts),
+      ts: parsed.toISOString(),
       model,
-      inputTokens: Math.max(0, dInput - dCached), // input_tokens includes cached
+      inputTokens: dInput === null || dCached === null ? null : Math.max(0, dInput - dCached), // input_tokens includes cached
       cacheReadTokens: dCached,
       outputTokens: dOutput,
-      cacheCreationTokens: 0,
+      cacheCreationTokens: null,
+      fieldEvidence: { cacheCreationTokens: "unsupported" },
     });
   }
   return events;
@@ -95,28 +93,20 @@ export function assembleRows(fileEvents, machineId = "") {
       const dk = `${e.date}|${e.model}`;
       let d = days.get(dk);
       if (!d) {
-        d = { date: e.date, model: e.model, inputTokens: 0, outputTokens: 0,
-              cacheReadTokens: 0, cacheCreationTokens: 0, requests: 0 };
+        d = { date: e.date, model: e.model, ...emptyMetrics() };
         days.set(dk, d);
       }
-      d.inputTokens += e.inputTokens;
-      d.outputTokens += e.outputTokens;
-      d.cacheReadTokens += e.cacheReadTokens;
-      d.cacheCreationTokens += e.cacheCreationTokens;
-      d.requests += 1;
+      for (const f of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"]) addMetric(d, e, f);
+      addMetric(d, { requests: 1 }, "requests");
 
       const hk = `${e.hour}|${e.model}`;
       let h = hours.get(hk);
       if (!h) {
-        h = { hour: e.hour, model: e.model, inputTokens: 0, outputTokens: 0,
-              cacheReadTokens: 0, cacheCreationTokens: 0, requests: 0 };
+        h = { hour: e.hour, model: e.model, ...emptyMetrics() };
         hours.set(hk, h);
       }
-      h.inputTokens += e.inputTokens;
-      h.outputTokens += e.outputTokens;
-      h.cacheReadTokens += e.cacheReadTokens;
-      h.cacheCreationTokens += e.cacheCreationTokens;
-      h.requests += 1;
+      for (const f of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"]) addMetric(h, e, f);
+      addMetric(h, { requests: 1 }, "requests");
     }
     for (const date of daysTouched) {
       sessionsByDay.set(date, (sessionsByDay.get(date) ?? 0) + 1);
@@ -136,6 +126,8 @@ export function assembleRows(fileEvents, machineId = "") {
       cacheReadTokens: acc.cacheReadTokens,
       cacheCreationTokens: acc.cacheCreationTokens,
       requests: acc.requests,
+      fieldEvidence: { ...acc.fieldEvidence, sessions: "known" },
+      dateBasis: "KST",
       sessions:
         i === 0 || sorted[i - 1].date !== acc.date
           ? sessionsByDay.get(acc.date) ?? 0
@@ -156,10 +148,20 @@ export function assembleRows(fileEvents, machineId = "") {
       cacheReadTokens: acc.cacheReadTokens,
       cacheCreationTokens: acc.cacheCreationTokens,
       requests: acc.requests,
+      fieldEvidence: acc.fieldEvidence,
+      dateBasis: "KST",
       source: "uploader",
     }));
 
   return { rows, hourlyRows };
+}
+
+// Codex session id = the UUID at the end of the rollout file name
+// (rollout-<local datetime>-<uuid>.jsonl). Falls back to the file stem.
+const ROLLOUT_UUID = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+export function sessionIdFromFile(file) {
+  const stem = fileStem(file);
+  return ROLLOUT_UUID.exec(stem)?.[1] ?? stem;
 }
 
 function sessionsRoot() {
@@ -183,11 +185,13 @@ async function* rolloutFiles(dir) {
   }
 }
 
-// Same { rows, hourlyRows, stats } contract as claude-code.mjs.
+// Same { rows, hourlyRows, sessions, health, stats } contract as claude-code.mjs.
 export async function aggregate({ sinceDate, machineId = "" } = {}) {
   const stats = { files: 0, linesRead: 0, malformed: 0, events: 0 };
-  const sinceMs = sinceDate ? Date.parse(`${sinceDate}T00:00:00Z`) : 0;
+  // mtime window starts at KST midnight of sinceDate (events use KST dates).
+  const sinceMs = sinceDate ? Date.parse(`${sinceDate}T00:00:00+09:00`) : 0;
   const fileEvents = [];
+  const sessionEvents = [];
 
   for await (const file of rolloutFiles(sessionsRoot())) {
     if (sinceMs) {
@@ -215,8 +219,157 @@ export async function aggregate({ sinceDate, machineId = "" } = {}) {
     const events = foldSession(lines).filter((e) => !sinceDate || e.date >= sinceDate);
     stats.events += events.length;
     if (events.length) fileEvents.push(events);
+    const sessionId = sessionIdFromFile(file);
+    for (const e of events) {
+      sessionEvents.push({
+        tool, sessionId, ts: e.ts, hour: e.hour, model: e.model,
+        inputTokens: e.inputTokens, outputTokens: e.outputTokens,
+        cacheReadTokens: e.cacheReadTokens, cacheCreationTokens: e.cacheCreationTokens,
+        fieldEvidence: e.fieldEvidence,
+      });
+    }
   }
 
   const { rows, hourlyRows } = assembleRows(fileEvents, machineId);
-  return { rows, hourlyRows, stats };
+  const sessions = bucketEvents(sessionEvents);
+  const health = makeHealth(
+    tool,
+    { filesScanned: stats.files, linesUnrecognized: stats.malformed },
+    sessions,
+  );
+  return { rows, hourlyRows, sessions, health, stats };
+}
+
+// ─── Rate-limit snapshot (plan windows) ─────────────────────────────────────
+// token_count event lines also carry the account's rate-limit windows
+// (measured 2026-09-30):
+//   payload.rate_limits = { limit_id:"codex", limit_name:null,
+//     primary:{ used_percent, window_minutes, resets_at (epoch s) },
+//     secondary:null | { ... }, credits:{ ... } }
+// Some accounts have primary 300-minute + secondary 10080-minute windows,
+// others a single 10080-minute primary. We take the most recent rate_limits
+// event (by timestamp) across the most recently modified rollout files and
+// turn each non-null window into a /api/limits snapshot. Only numbers and the
+// limit id leave the machine — never credits, paths or content.
+
+// How many of the most recently modified rollout files latestLimits reads.
+// The live session's file is normally the newest; a few more cover a session
+// whose latest lines carry no rate_limits yet.
+export const LIMIT_FILES = 5;
+
+// The most recent rate_limits event in one file's parsed lines:
+// { ts (ms), rateLimits } or null. Lines without a parseable timestamp are
+// ordered by position (a later line wins a tie).
+export function latestRateLimits(lines) {
+  let best = null;
+  for (const entry of lines) {
+    const rateLimits = entry?.payload?.rate_limits ?? entry?.rate_limits;
+    if (!rateLimits || typeof rateLimits !== "object") continue;
+    const ms = new Date(entry.timestamp).getTime();
+    const ts = Number.isNaN(ms) ? -Infinity : ms;
+    if (!best || ts >= best.ts) best = { ts, rateLimits };
+  }
+  return best;
+}
+
+// Snapshot organization: "device:" + deviceTag(machineId) = sha1 of this
+// machine's pseudonymous device id, first 8 hex (never the hostname, and never
+// raw chars of a --machine-id override — F3), so one member's devices on
+// different Codex plans don't overwrite each other's rows on the server
+// (key = date, member, accountEmail, organization, window). "" without an id.
+export function deviceOrganization(machineId) {
+  const tag = deviceTag(machineId);
+  return tag ? `device:${tag}` : "";
+}
+
+// One rate_limits object → LimitSnapshotInput[] (server schema unchanged):
+// primary then secondary, each { date: KST today, accountEmail:
+// "codex:" + limit_id, organization: deviceOrganization(machineId),
+// window: "codex_<minutes>m", utilizationPct: used_percent,
+// resetsAt: ISO(resets_at * 1000) | null }.
+// Skipped: a null window, one without window_minutes / used_percent, and a
+// STALE one (Ruling R23) — its reset already passed (resets_at*1000 <= now) or
+// the reading is older than the window itself (eventTs < now − minutes). An
+// unknown eventTs counts as stale: the snapshot is stamped with today's date,
+// so an old percentage must never pass for a fresh one.
+export function limitsToSnapshots(rateLimits, { now = new Date(), eventTs, machineId } = {}) {
+  if (!rateLimits || typeof rateLimits !== "object") return [];
+  const nowMs = now.getTime();
+  const evMs = typeof eventTs === "number" && Number.isFinite(eventTs) ? eventTs : -Infinity;
+  const limitId = typeof rateLimits.limit_id === "string" && rateLimits.limit_id ? rateLimits.limit_id : "codex";
+  const organization = deviceOrganization(machineId);
+  const date = kstDate(now);
+  const out = [];
+  for (const w of [rateLimits.primary, rateLimits.secondary]) {
+    if (!w || typeof w !== "object") continue;
+    const minutes = w.window_minutes;
+    const used = w.used_percent;
+    if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0) continue;
+    if (typeof used !== "number" || !Number.isFinite(used) || used < 0) continue;
+    const hasReset = typeof w.resets_at === "number" && Number.isFinite(w.resets_at);
+    if (hasReset && w.resets_at * 1000 <= nowMs) continue; // window already rolled over
+    if (evMs < nowMs - minutes * 60_000) continue; // reading older than the window
+    out.push({
+      date,
+      accountEmail: `codex:${limitId}`,
+      organization,
+      window: `codex_${minutes}m`,
+      utilizationPct: used,
+      resetsAt: hasReset ? new Date(w.resets_at * 1000).toISOString() : null,
+    });
+  }
+  return out;
+}
+
+async function readJsonLines(file) {
+  const lines = [];
+  const rl = createInterface({
+    input: createReadStream(file, { encoding: "utf8" }),
+    crlfDelay: Infinity,
+  });
+  for await (const line of rl) {
+    if (!line) continue;
+    try {
+      lines.push(JSON.parse(line));
+    } catch {
+      // malformed line — not a rate_limits event
+    }
+  }
+  return lines;
+}
+
+// files: rollout paths. Reads the LIMIT_FILES most recently modified ones and
+// snapshots the newest rate_limits event among them (stale windows dropped,
+// see limitsToSnapshots); [] when none has any.
+// Unreadable / vanished files are skipped.
+export async function latestLimits(files, { now = new Date(), machineId } = {}) {
+  const withMtime = [];
+  for (const file of files) {
+    try {
+      withMtime.push({ file, mtimeMs: (await stat(file)).mtimeMs });
+    } catch {
+      // gone since listing
+    }
+  }
+  withMtime.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  let best = null;
+  for (const { file } of withMtime.slice(0, LIMIT_FILES)) {
+    let lines;
+    try {
+      lines = await readJsonLines(file);
+    } catch {
+      continue;
+    }
+    const found = latestRateLimits(lines);
+    if (found && (!best || found.ts > best.ts)) best = found;
+  }
+  return best ? limitsToSnapshots(best.rateLimits, { now, eventTs: best.ts, machineId }) : [];
+}
+
+// Snapshot this machine's Codex plan windows from ~/.codex/sessions.
+// machineId = the pseudonymous device id (config.machineId).
+export async function snapshotLimits({ now = new Date(), machineId } = {}) {
+  const files = [];
+  for await (const file of rolloutFiles(sessionsRoot())) files.push(file);
+  return latestLimits(files, { now, machineId });
 }

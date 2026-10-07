@@ -7,6 +7,7 @@ import {
   SyncRun,
   UsageDaily,
   UsageHourly,
+  UsageSession,
 } from "@/lib/db";
 import type { LimitSnapshotInput, UsageHourlyRow, UsageRow } from "@/lib/types";
 import { canonicalizeModel } from "@/lib/models";
@@ -174,9 +175,10 @@ export async function upsertUsageRows(
               cacheCreationTokens: row.cacheCreationTokens ?? null,
               requests: row.requests ?? null,
               sessions: row.sessions ?? null,
+              fieldEvidence: row.fieldEvidence,
+              dateBasis: row.dateBasis ?? "미확인",
               costEstimateCents: row.costEstimateCents ?? null,
               source: row.source,
-              raw: row.raw ?? null,
             },
           },
           upsert: true,
@@ -239,7 +241,7 @@ export async function autoClaimEmailIdentities(): Promise<number> {
 export async function relinkMemberIds(): Promise<void> {
   await connectDb();
   // Minimal shared surface so the two differently-typed models iterate together.
-  const collections = [UsageDaily, UsageHourly] as unknown as Array<{
+  const collections = [UsageDaily, UsageHourly, UsageSession] as unknown as Array<{
     aggregate: (p: unknown[]) => Promise<Array<{ _id: { tool: string; externalId: string } }>>;
     updateMany: (f: unknown, u: unknown) => Promise<unknown>;
   }>;
@@ -365,6 +367,8 @@ export async function upsertHourlyRows(
               cacheReadTokens: r.cacheReadTokens ?? null,
               cacheCreationTokens: r.cacheCreationTokens ?? null,
               requests: r.requests ?? null,
+              fieldEvidence: r.fieldEvidence,
+              dateBasis: r.dateBasis ?? "미확인",
               source: r.source,
             },
           },
@@ -417,14 +421,18 @@ export async function upsertLimitSnapshots(
 
 export async function recordSyncRun(
   tool: string,
-  status: "ok" | "error",
-  opts: { lastSyncedDate?: string; message?: string } = {},
+  status: "ok" | "partial" | "empty" | "error",
+  opts: { lastSyncedDate?: string; message?: string; retrySince?: string; lastCheckedDate?: string; emptyScopeCount?: number; connectorTool?: string } = {},
 ): Promise<void> {
   await connectDb();
   await SyncRun.create({
     tool,
+    connectorTool: opts.connectorTool ?? tool,
     status,
     lastSyncedDate: opts.lastSyncedDate ?? null,
+    retrySince: opts.retrySince ?? null,
+    lastCheckedDate: opts.lastCheckedDate ?? null,
+    emptyScopeCount: opts.emptyScopeCount ?? 0,
     message: opts.message ?? null,
   });
 }
@@ -432,8 +440,14 @@ export async function recordSyncRun(
 // Latest fully-synced day for a connector, used as the incremental cursor.
 export async function lastSyncedDate(tool: string): Promise<string | null> {
   await connectDb();
-  const row = await SyncRun.findOne({ tool, status: "ok" })
+  const row = await SyncRun.findOne({ tool, status: { $in: ["ok", "partial"] } })
     .sort({ _id: -1 })
     .lean();
   return row?.lastSyncedDate ?? null;
+}
+
+export async function lastRetrySince(tool: string): Promise<string | null> {
+  await connectDb();
+  const run = await SyncRun.findOne({ tool }).sort({ _id: -1 }).lean();
+  return run?.retrySince ?? null;
 }

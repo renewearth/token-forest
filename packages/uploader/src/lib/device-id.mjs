@@ -1,13 +1,13 @@
 // Stable pseudonymous device identity: a random UUID persisted OUTSIDE the
 // uploader/ folder so a reinstall keeps it. Hostname is NEVER used or sent.
-import { randomUUID } from "node:crypto";
+// Location: $TOKEN_FOREST_STATE_DIR/device-id (default ~/.token-forest).
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
 import path from "node:path";
-
-const ID_PATH = path.join(homedir(), ".token-forest", "device-id");
+import { statePath } from "./state-dir.mjs";
 
 export function deviceId() {
+  const ID_PATH = statePath("device-id");
   try {
     const existing = readFileSync(ID_PATH, "utf8").trim();
     if (existing) return existing;
@@ -33,4 +33,14 @@ export function deviceId() {
     console.error(`warn: could not persist device-id (${err.message}); using ephemeral id`);
     return id;
   }
+}
+
+// Short device tag for ids that must tell this device apart without carrying
+// the machineId itself: sha1(machineId) → first 8 hex chars. A --machine-id /
+// TOKEN_FOREST_MACHINE_ID override can be a hostname, so raw machineId chars
+// never go into a sessionId or organization (final-review F3). Used by the
+// grok fallback sessionId and the Codex limit organization. "" without an id.
+export function deviceTag(machineId) {
+  if (typeof machineId !== "string" || !machineId) return "";
+  return createHash("sha1").update(machineId).digest("hex").slice(0, 8);
 }

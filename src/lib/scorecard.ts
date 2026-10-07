@@ -59,7 +59,7 @@ export function requestAnatomy(
 }
 
 // A2 캐시 절감률 — 절감 가중치 / (실소비 + 절감). 가중치 산출은 쿼리 측에서
-// rateFamily 로 계산해 넘긴다 (여긴 순수 비율만). % 가 아닌 0..1.
+// 단가표(priceFor) 로 계산해 넘긴다 (여긴 순수 비율만). % 가 아닌 0..1.
 export function cacheSavingsRate(saved: number, spent: number): number | null {
   return ratio(saved, spent + saved);
 }

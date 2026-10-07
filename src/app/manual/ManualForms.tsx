@@ -186,7 +186,7 @@ function CsvForm() {
           onChange={(e) => setCsv(e.target.value)}
           rows={7}
           placeholder={
-            "date,member_email,tool,model,input_tokens,output_tokens,requests\n2026-07-15,alice@example.com,cursor,,12000,3400,\n2026-07-15,bob@example.com,copilot,,,,45"
+            "date,member_email,tool,model,input_tokens,output_tokens,requests\n2026-07-15,alice@example.com,cursor,,12000,3400,\n2026-07-15,bob@example.com,grok,,,,45"
           }
           className={`${inputCls} font-mono`}
         />
