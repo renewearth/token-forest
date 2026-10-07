@@ -95,8 +95,14 @@ function ensureSeeded(): Promise<void> {
 // that several queries on one page (e.g. /team) make. Outside a React server
 // render (CLI scripts) cache() does not memoize, so every call re-reads.
 export const loadPriceTable = cache(async function loadPriceTable(): Promise<PriceTable> {
-  await ready();
-  await ensureSeeded();
+  // Read-only previews use the stored table without creating indexes or seeds.
+  // Database permissions / the preview command guard enforce all other writes.
+  if (process.env.TOKEN_FOREST_READ_ONLY === "1") {
+    await connectDb();
+  } else {
+    await ready();
+    await ensureSeeded();
+  }
   const docs = await ModelPriceModel.find().lean();
   return {
     entries: docs
