@@ -25,7 +25,7 @@ import { getMyMachines, type MachineStatus } from "@/lib/queries";
 import { DERIVED_MACHINE_ID } from "@/lib/sessions";
 
 const DOMAIN = "@machines.test";
-const OWN = { externalId: { $regex: `${DOMAIN.replace(/[.]/g, "\\.")}$` } };
+const OWN = { externalId: { $regex: /@machines\.test$/ } };
 
 let pass = 0;
 let fail = 0;

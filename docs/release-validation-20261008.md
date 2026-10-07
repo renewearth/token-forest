@@ -10,6 +10,12 @@ Validated 2026-10-08 against the candidate based on `80379e160b61bc5672eed21d439
 - Record ingestion remains opt-in for installed uploaders. This release does not enable reviewed record cutover scopes, reinstall local collectors, backfill production records, or claim globally complete collection.
 - Experiments remain controlled by `TOKEN_FOREST_EXPERIMENTS_MODE` (default `off`).
 
+## Release review follow-up
+
+- Independent review reproduced a heartbeat-only tool receiving a record receipt timestamp in the status API. Removed that assignment; the timestamp stays under device health. Collection overview (12 checks), record-ingest routes, collection adversarial (7 checks), TypeScript and targeted ESLint passed after the fix.
+- CodeQL identified partial regular-expression escaping in two verification scripts. Their fixed test identity suffixes now use literal regular expressions. Re-ran `verify-ingest-v2.ts` (104 passed, 0 failed), `verify-machines.ts` (41 passed, 0 failed), TypeScript and targeted ESLint successfully. No application runtime source changed in this follow-up.
+- Docker preview at `http://dev2.taild6091b.ts.net:4803/collection` uses disposable synthetic data. The running application shows the forest, an expanded people graph and both collection entry links; keyboard opening of Codex device details passed. This preview is not the production deployment.
+
 ## Reproduction
 
 Run `src/scripts/verify-*` and `packages/uploader/src/scripts/verify-*` with the disposable database guards specified by each script. HTTP checks need a local application with cron disabled. The collection overview script requires `MONGODB_URI=mongodb://127.0.0.1:27398/tf-v2-test-collection-preview` and localhost port 4812. Experiment HTTP verification expects a development server action manifest.
