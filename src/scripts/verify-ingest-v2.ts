@@ -31,7 +31,7 @@ import { registerIdentities, upsertHourlyRows, upsertUsageRows } from "@/lib/usa
 
 const TEST_DB = "tf-v2-test";
 const DOMAIN = "@ingest-v2.test";
-const OWN = { externalId: { $regex: `${DOMAIN.replace(/[.]/g, "\\.")}$` } };
+const OWN = { externalId: { $regex: /@ingest-v2\.test$/ } };
 
 let pass = 0;
 let fail = 0;
