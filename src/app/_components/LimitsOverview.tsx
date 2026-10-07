@@ -30,7 +30,7 @@ export default async function LimitsOverview({
   );
 
   return (
-    <Card title="Claude 사용 한도" hint="구성원·계정별 최신 소진율" className={className}>
+    <Card title="플랜 사용 한도 (Claude·Codex)" hint="구성원·계정별 최신 소진율" className={className}>
       {/* auto-fit collapses empty tracks: one member fills the full card width
           (bars span full), while more members pack 2-up as the card allows. */}
       <div className="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-x-8 gap-y-6">

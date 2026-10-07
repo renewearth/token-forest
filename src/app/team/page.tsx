@@ -2,11 +2,11 @@ export const dynamic = "force-dynamic";
 
 import {
   getAdoptionMatrix,
+  getUsageObservationSnapshot,
   getAllMembers,
   getCacheSavings,
   getDailyRequests,
   getHourlyHeatmap,
-  getInactiveMembers,
   getLimitHistory,
   getLimitHitCounts,
   getMemberLeaderboard,
@@ -24,11 +24,9 @@ import {
 } from "@/lib/queries";
 import type { PremiumShareWeeklyRow } from "@/lib/queries";
 import {
-  formatCompact,
   formatNumber,
   parseDays,
   rangeForDays,
-  REQUESTS_ONLY_TOOLS,
   toolLabel,
 } from "@/app/_lib/ui";
 import { AdoptionChart, TrendArea } from "@/app/_components/charts";
@@ -49,8 +47,8 @@ import { ModelDonut } from "@/app/_components/analytics/ModelDonut";
 import { WowTable } from "@/app/_components/analytics/WowTable";
 import { getNumStyle } from "@/app/_lib/numfmt";
 import TeamScorecard from "@/app/_components/analytics/TeamScorecard";
-import MaturityBanner from "@/app/_components/analytics/MaturityBanner";
-import { maturityFromParts } from "@/lib/team-maturity";
+import UsageCharacteristics from "@/app/_components/UsageCharacteristics";
+import CollectionStatusPanel from "@/app/_components/CollectionStatusPanel";
 import {
   adoptionLeadDays,
   cacheReuseRatio,
@@ -65,6 +63,12 @@ import {
   weeklyTeamSeries,
 } from "@/lib/scorecard";
 import type { WeeklySeriesPoint } from "@/lib/scorecard";
+import { organizationLabels, windowLabel } from "@/lib/limit-window";
+import { loadPriceTable } from "@/lib/price-table";
+import { resolveUnitSelection, unitHint, unitLabel, unpricedNote, type SelectionParams } from "@/lib/units";
+import { UsageAnalysis } from "@/app/_components/UsageAnalysis";
+import { UsageComparison } from "@/app/_components/UsageComparison";
+import { formatUsage } from "@/app/_lib/usage-format";
 
 const MS_PER_DAY = 86_400_000;
 
@@ -158,15 +162,18 @@ function premiumShareSeries(rows: PremiumShareWeeklyRow[]): WeeklySeriesPoint[] 
 export default async function TeamPage({
   searchParams,
 }: {
-  searchParams: Promise<{ days?: string }>;
+  searchParams: Promise<SelectionParams & { days?: string }>;
 }) {
-  const days = parseDays((await searchParams).days);
+  const params = await searchParams;
+  const days = parseDays(params.days);
   const range = rangeForDays(days);
+  const sel = resolveUnitSelection(await loadPriceTable(), params);
+  const keep = { unit: sel.unit, ref: sel.ref ?? undefined, basis: sel.basis };
+  const label = unitLabel(sel.unit, sel.ref, sel.basis);
 
   const [
     adoptionRate,
     matrix,
-    inactive,
     weeklyActive,
     scoreWeekly,
     premiumShareWeekly,
@@ -185,29 +192,42 @@ export default async function TeamPage({
     allMembers,
     numStyle,
     modelBreadthWeekly,
+    usageSnapshot,
   ] = await Promise.all([
     getTeamAdoptionRate(range),
     getAdoptionMatrix(),
-    getInactiveMembers(7),
     getWeeklyActiveByTool(range),
     getScorecardWeeklySums(range),
     getPremiumShareWeekly(range),
     getCacheSavings(range),
     getModelAdoption(120),
     getOnboardingActivity(),
-    getModelTierTrend(range),
-    getHourlyHeatmap(range),
-    getModelDistribution(range),
-    getMemberWowDeltas(),
+    getModelTierTrend(range, sel),
+    getHourlyHeatmap(range, undefined, sel),
+    getModelDistribution(range, undefined, sel),
+    getMemberWowDeltas(sel),
     getDailyRequests(range),
-    getToolSummary(range),
+    getToolSummary(range, sel),
     getLimitHistory(range),
     getLimitHitCounts(range),
-    getMemberLeaderboard(rangeForDays(30)),
+    getMemberLeaderboard(rangeForDays(30), sel),
     getAllMembers(),
     getNumStyle(),
     getModelBreadthWeekly(range),
+    getUsageObservationSnapshot(range, sel),
   ]);
+
+  // Plan-limit organization labels per member: Codex "device:…" orgs show as
+  // "기기 N" (numbered within that member), never the raw device id.
+  const limitOrgLabels = new Map<string, Map<string, string>>();
+  for (const name of new Set([...limitHistory, ...limitHits].map((r) => r.memberName))) {
+    const orgs = [...limitHistory, ...limitHits]
+      .filter((r) => r.memberName === name)
+      .map((r) => r.organization);
+    limitOrgLabels.set(name, organizationLabels(orgs));
+  }
+  const limitOrg = (memberName: string, org: string) =>
+    limitOrgLabels.get(memberName)?.get(org) ?? org;
 
   // ---- 팀 스코어카드 조립 (순수 계산은 scorecard.ts, 여긴 원재료 배선만) ----
   const claudeOnlyWeekly = scoreWeekly.filter((r) => r.tool === "claude_code");
@@ -231,21 +251,13 @@ export default async function TeamPage({
           .reduce((acc, weeks) => acc.map((v, i) => v + weeks[i]), [0, 0, 0, 0])
           .map((sum) => sum / onboarding.length);
 
-  // ---- AI 사용 성숙도 배너 조립 (계산 로직은 team-maturity.ts와 공유) ----
-  const maturity = maturityFromParts({
-    adoptionRate,
-    scoreWeekly,
-    toolSummary,
-    modelAdoption,
-    teamSize,
-  });
+  const heatmapHasData = heatmap.some((row) => row.some((v) => v !== null && v > 0));
 
-  const heatmapHasData = heatmap.some((row) => row.some((v) => v > 0));
-
+  const unpricedTokens = toolSummary.reduce((sum, t) => sum + (t.unpricedTokens ?? 0), 0);
   const requestsOnlyTools = toolSummary
-    .filter((t) => REQUESTS_ONLY_TOOLS.has(t.tool) || (t.tokens === 0 && t.requests > 0))
+    .filter((t) => (t.observation?.value === null && t.requests > 0))
     .map((t) => t.tool);
-  const hasRequestsData = requests.some((r) => r.requests > 0);
+  const hasRequestsData = requests.some((r) => r.observedRequests !== null);
 
   // Seat utilization: full roster × 30-day leaderboard. Members absent from
   // the leaderboard had no usage — they sink to the bottom with zeros.
@@ -257,35 +269,42 @@ export default async function TeamPage({
         id: m.id,
         name: m.name,
         tokens: row?.tokens ?? 0,
+        hasRecord: row?.hasRecord ?? false,
+        observation: row?.observation,
+        unpricedTokens: row?.unpricedTokens ?? 0,
         share: row?.weightedShare ?? 0,
       };
     })
     .sort(
-      (a, b) => b.share - a.share || b.tokens - a.tokens || a.name.localeCompare(b.name),
+      (a, b) => a.id.localeCompare(b.id),
     );
 
   return (
     <div>
-      <PageHeader title="팀 분석">
-        <RangeTabs days={days} base="/team" />
-      </PageHeader>
+      <PageHeader title="팀 분석" />
       <p className="-mt-4 mb-6 text-xs text-[var(--text-muted)]">
         {range.from} ~ {range.to}
       </p>
+      <UsageAnalysis periodControl={<RangeTabs days={days} base="/team" keep={keep} />} selection={sel} total={usageSnapshot.totals.totalTokens} unpricedTokens={usageSnapshot.tools.unpricedTokens} numStyle={numStyle} observation={usageSnapshot.totals.observation} range={range}>
+        <UsageComparison people={usageSnapshot.people} tools={usageSnapshot.tools} unit={sel.unit} basis={sel.basis} />
+      </UsageAnalysis>
+      {unpricedTokens > 0 && (
+        <p className="mt-2 text-xs text-[var(--text-muted)]">{unpricedNote(formatNumber(unpricedTokens))}</p>
+      )}
 
-      <SectionHeading lead="팀이 AI 도구를 얼마나 넓게, 꾸준히 쓰게 되고 있는가">도입 확산</SectionHeading>
+      <SectionHeading lead="수집된 사용 기록이 어떤 소스와 구성원에 연결되어 있는가">수집된 사용 기록</SectionHeading>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card title="팀 도입률" hint="주별 활성 인원 ÷ 등록 인원">
+        <Card title="사용 기록이 확인된 구성원 비율" hint="주별 기록 확인 인원 ÷ 등록 인원 · 실제 도입률 아님">
           {adoptionRate.length ? (
             <AdoptionRateChart data={adoptionRate} />
           ) : (
             <EmptyState message="매핑된 구성원 사용 기록이 없습니다." />
           )}
-          <Insight>등록 구성원 중 그 주에 실제로 쓴 비율입니다. 우상향이면 확산 중, 정체되면 온보딩·활용 장벽을 점검할 시점입니다.</Insight>
+          <Insight>등록 구성원 가운데 사용 기록이 수집된 비율입니다. 미수집 도구·기기·계정의 사용 여부는 알 수 없습니다.</Insight>
         </Card>
 
-        <Card title="도입 매트릭스" hint="구성원 × 도구 · 마지막 사용">
+        <Card title="구성원별 수집 기록" hint="구성원 × 도구 · 마지막 사용">
           {matrix.rows.length ? (
             <>
               <table className="w-full text-sm">
@@ -339,56 +358,27 @@ export default async function TeamPage({
           ) : (
             <EmptyState message="등록된 구성원이 없습니다." />
           )}
-          <Insight>빈 칸이 많은 행(사람)은 온보딩 대상, 빈 칸이 많은 열(도구)은 도입 여지가 있는 도구입니다.</Insight>
+          <Insight>빈 칸은 수집된 기록을 확인할 수 없다는 뜻입니다. 실제 미사용이나 지원이 필요한 사람으로 단정하지 않습니다.</Insight>
         </Card>
 
-        <Card title="비활성 구성원" hint="최근 7일 무사용">
-          {inactive.length ? (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs text-[var(--text-muted)]">
-                  <th className="pb-2 font-medium">이름</th>
-                  <th className="pb-2 font-medium">이메일</th>
-                  <th className="pb-2 text-right font-medium">마지막 사용일</th>
-                </tr>
-              </thead>
-              <tbody>
-                {inactive.map((m) => (
-                  <tr
-                    key={m.email}
-                    className="border-t border-black/5 dark:border-white/5"
-                  >
-                    <td className="py-2">{m.name}</td>
-                    <td className="py-2 text-[var(--text-secondary)]">{m.email}</td>
-                    <td className="py-2 text-right tabular-nums">
-                      {m.lastDate ?? "기록 없음"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <EmptyState message="전원이 최근 7일 내 사용했습니다 🎉" />
-          )}
-          <Insight>도입 이탈의 조기 신호입니다. 장기 비활성이면 설치·계정 등 장벽이 있는지 확인해 보세요.</Insight>
-        </Card>
+        <CollectionStatusPanel />
 
-        <Card title="주간 활성 사용자 (도구별)" hint="주별 고유 구성원">
+        <Card title="주간 기록 확인 인원 (도구별)" hint="주별 고유 구성원">
           {weeklyActive.data.length ? (
             <AdoptionChart data={weeklyActive.data} tools={weeklyActive.tools} />
           ) : (
             <EmptyState message="매핑된 구성원 사용 기록이 없습니다." />
           )}
-          <Insight>어떤 도구가 팀의 주력이 되어가는지 — 도구별 확산 속도의 비교입니다.</Insight>
+          <Insight>도구별로 기록이 수집된 인원입니다. 수집 지원 범위가 다른 도구 사이의 도입 수준을 평가하지 않습니다.</Insight>
         </Card>
       </div>
 
       <SectionHeading lead="팀의 사용 습관이 어떤 모습이고, 어떻게 변하고 있는가">사용 패턴</SectionHeading>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card title="AI 활용 스코어카드" hint="주별 · 풀드/중앙값 병기 · 순위 없음" className="lg:col-span-2">
+        <Card title="사용 특성 상세" hint="고정 기준 · 주별 · 풀드/중앙값 병기 · 순위 없음" className="lg:col-span-2">
           <div className="mb-6">
-            <MaturityBanner result={maturity} />
+            <UsageCharacteristics range={range} />
           </div>
           {scoreWeekly.length ? (
             <TeamScorecard
@@ -405,65 +395,65 @@ export default async function TeamPage({
           ) : (
             <EmptyState message="이 기간에 팀 사용 기록이 없습니다." />
           )}
-          <Insight>4축(습관·효율·숙련·확장) 원값 스코어카드입니다 — 점수화·순위 없음. 풀드는 팀 자원 전체 관점, 중앙값은 전형적인 팀원 관점입니다.</Insight>
+          <Insight>각 항목은 수집된 사용 특성입니다. 합산과 중앙값을 함께 보되 사람의 역량이나 조직의 성숙도 단계로 환산하지 않습니다.</Insight>
+          <Insight>사용 특성의 계산식은 선택한 집계 기준과 무관합니다. 모델 폭과 프리미엄 비중은 입력+출력, 캐시 절감은 수집된 캐시 항목의 공개 단가 기준을 유지합니다.</Insight>
         </Card>
 
-        <Card title="모델 티어 믹스" hint="주별 토큰 비중 %" className="lg:col-span-2">
+        <Card title="모델 티어 믹스" hint={`주별 ${label} 비중 % · ${unitHint(sel.unit, sel.basis)}`} className="lg:col-span-2">
           {tierMix.weeks.length ? (
             <TierMixChart weeks={tierMix.weeks} families={tierMix.families} />
           ) : (
-            <EmptyState message="이 기간에 기록된 토큰 사용량이 없습니다." />
+            <EmptyState message="이 기간에 기록된 사용량이 없습니다." />
           )}
-          <Insight>팀 토큰이 어떤 등급 모델에 쓰이는지의 구성비입니다. 새 모델 출시 후 비중이 빠르게 옮겨가면 팀이 신모델을 빠르게 흡수한다는 뜻입니다.</Insight>
+          <Insight>선택한 기준의 사용량이 어떤 모델군에 쓰이는지의 구성비입니다. 새 모델 출시 후 비중 변화를 비교할 수 있습니다.</Insight>
         </Card>
 
         <Card
           title="시간대 히트맵"
-          hint="요일 × 시간 · usage_hourly"
+          hint={`요일 × 시간 · ${label}`}
           className="lg:col-span-2"
         >
           {heatmapHasData ? (
-            <Heatmap matrix={heatmap} />
+            <Heatmap matrix={heatmap} unit={sel.unit} basis={sel.basis} />
           ) : (
             <EmptyState message="이 기간에 시간별(hourly) 사용 기록이 없습니다." />
           )}
-          <Insight>팀의 AI 집중 작업 시간대입니다. 회의·배포 일정과의 겹침을 피하는 참고자료가 됩니다.</Insight>
+          <Insight>수집된 소스의 시간 버킷별 사용량입니다. 사람의 실제 집중 시간이나 근무 시간을 나타내지 않습니다.</Insight>
         </Card>
 
-        <Card title="모델 분포" hint="모델별 토큰 점유율">
+        <Card title="모델 분포" hint={`모델별 ${label} 점유율`}>
           {modelDist.length ? (
-            <ModelDonut rows={modelDist} />
+            <ModelDonut rows={modelDist} unit={sel.unit} basis={sel.basis} />
           ) : (
-            <EmptyState message="이 기간에 기록된 토큰 사용량이 없습니다." />
+            <EmptyState message="이 기간에 기록된 사용량이 없습니다." />
           )}
           <Insight>기간 전체의 모델별 점유율 스냅샷 — 티어 믹스의 “지금” 단면입니다.</Insight>
         </Card>
 
-        <Card title="주간 증감" hint="최근 7일 vs 이전 7일">
+        <Card title="주간 증감" hint={`최근 7일 vs 이전 7일 · ${label}`}>
           {wow.length ? (
-            <WowTable rows={wow} />
+            <WowTable rows={wow} unit={sel.unit} />
           ) : (
             <EmptyState message="최근 2주간 구성원 사용 기록이 없습니다." />
           )}
-          <Insight>구성원별 급증/급감의 조기 신호입니다. 급감은 이탈 또는 휴가, 급증은 새 활용법 발견일 수 있습니다.</Insight>
+          <Insight>각 기간의 수집된 절대값을 보여줍니다. 변화의 이유는 업무 맥락과 수집 상태를 함께 확인해야 하며 이탈·휴가·성과를 추정하지 않습니다.</Insight>
         </Card>
 
         <Card title="일별 요청 추이" hint="requests" className="lg:col-span-2">
           {hasRequestsData ? (
-            <TrendArea data={requests} dataKey="requests" unit="요청" />
+            <TrendArea data={requests} dataKey="observedRequests" unit="건" />
           ) : (
             <EmptyState message="이 기간에 기록된 요청이 없습니다." />
           )}
           <Insight>토큰을 보고하지 않는 도구(Copilot)까지 포함한 전체 활동량 추세입니다.</Insight>
         </Card>
 
-        {requestsOnlyTools.length > 0 && (
+        {sel.basis !== "requests" && requestsOnlyTools.length > 0 && (
           <div className="rounded-lg border border-[var(--series-3)]/40 bg-[var(--series-3)]/5 px-4 py-3 text-xs text-[var(--text-secondary)] lg:col-span-2">
             <strong className="font-semibold text-[var(--text-primary)]">
               토큰 vs 활동량 안내:
             </strong>{" "}
-            {requestsOnlyTools.map((t) => toolLabel(t)).join(", ")} 은(는) 토큰 수치를
-            제공하지 않고 요청(requests) 수만 집계됩니다. 토큰 차트에는 나타나지 않으므로
+            {requestsOnlyTools.map((t) => toolLabel(t)).join(", ")}에서 선택한 토큰 항목을 확인할 수 없고 요청 기록만 관측되었습니다. 수집 지원 범위를 확인하고
             도입률·활동량은 위 요청 추이와 주간 활성 사용자로 함께 확인하세요.
           </div>
         )}
@@ -474,7 +464,7 @@ export default async function TeamPage({
               <thead>
                 <tr className="text-left text-xs text-[var(--text-muted)]">
                   <th className="pb-2 font-medium">도구</th>
-                  <th className="pb-2 text-right font-medium">토큰</th>
+                  <th className="pb-2 text-right font-medium">{label}</th>
                   <th className="pb-2 text-right font-medium">요청</th>
                   <th className="pb-2 text-right font-medium">활성</th>
                 </tr>
@@ -486,7 +476,7 @@ export default async function TeamPage({
                       <ToolChip tool={t.tool} />
                     </td>
                     <td className="py-2 text-right tabular-nums">
-                      {t.tokens ? formatNumber(t.tokens) : "—"}
+                      {formatUsage(t.observation ? t.observation.value : null, sel.unit)}
                     </td>
                     <td className="py-2 text-right tabular-nums">
                       {t.requests ? formatNumber(t.requests) : "—"}
@@ -511,7 +501,7 @@ export default async function TeamPage({
             <Card
               key={`${h.memberName}|${h.accountEmail}|${h.organization}`}
               title={`${h.memberName} · ${h.accountEmail}`}
-              hint={h.organization}
+              hint={limitOrg(h.memberName, h.organization)}
             >
               <LimitHistoryChart days={h.days} />
             </Card>
@@ -553,9 +543,9 @@ export default async function TeamPage({
                       {r.accountEmail}
                     </td>
                     <td className="py-2 text-[var(--text-secondary)]">
-                      {r.organization}
+                      {limitOrg(r.memberName, r.organization)}
                     </td>
-                    <td className="py-2">{r.window}</td>
+                    <td className="py-2">{windowLabel(r.window)}</td>
                     <td className="py-2 text-right tabular-nums">{r.days90}</td>
                     <td className="py-2 text-right tabular-nums">{r.days100}</td>
                   </tr>
@@ -565,30 +555,31 @@ export default async function TeamPage({
           ) : (
             <EmptyState message="기간 내 90% 이상 도달한 계정이 없습니다." />
           )}
-          <Insight>100% 도달 일수 = 그날 실제로 작업이 막힌 날 — 가장 직접적인 증석 신호입니다. 90%+가 잦으면 예방적 검토 대상입니다.</Insight>
+          <Insight>수집된 한도 스냅샷입니다. 실제 업무가 중단됐는지는 이 값만으로 알 수 없으므로 본인의 작업 맥락과 함께 확인합니다.</Insight>
         </Card>
 
-        <Card title="좌석 활용" hint="최근 30일 고정" className="lg:col-span-2">
+        <Card title="구성원별 수집 합계" hint="최근 30일 고정" className="lg:col-span-2">
           {seatRows.length ? (
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-xs text-[var(--text-muted)]">
                   <th className="pb-2 font-medium">이름</th>
-                  <th className="pb-2 text-center font-medium">활동</th>
-                  <th className="pb-2 text-right font-medium">토큰</th>
-                  <th className="pb-2 text-right font-medium">보정 지수</th>
+                  <th className="pb-2 text-center font-medium">수집 기록</th>
+                  <th className="pb-2 text-right font-medium">{label}</th>
+                  <th className="pb-2 text-right font-medium">수집 상태</th>
                 </tr>
               </thead>
               <tbody>
                 {seatRows.map((r) => (
                   <tr key={r.id} className="border-t border-black/5 dark:border-white/5">
                     <td className="py-2">{r.name}</td>
-                    <td className="py-2 text-center">{r.tokens > 0 ? "✅" : "⬜"}</td>
+                    <td className="py-2 text-center">{r.hasRecord ? "기록 있음" : "기록 미확인"}</td>
                     <td className="py-2 text-right tabular-nums">
-                      {r.tokens > 0 ? formatCompact(r.tokens, numStyle) : "—"}
+                      {formatUsage(r.observation ? r.observation.value : null, sel.unit, numStyle)}
+                      {r.unpricedTokens > 0 && <div className="text-[11px] text-[var(--text-muted)]">{unpricedNote(formatNumber(r.unpricedTokens))}</div>}
                     </td>
                     <td className="py-2 text-right tabular-nums">
-                      {r.share.toFixed(1)}
+                      일부 수집
                     </td>
                   </tr>
                 ))}
@@ -597,7 +588,7 @@ export default async function TeamPage({
           ) : (
             <EmptyState message="등록된 구성원이 없습니다." />
           )}
-          <Insight>노는 좌석(⬜)은 감석 후보, 사용이 소수에 몰려 있으면 확산 여지 — 증석·감석 양방향 판단에 씁니다. 이 표는 용량 계획용 지표로, 나무 성장과는 무관합니다.</Insight>
+          <Insight>고정된 구성원 순서의 수집 합계입니다. 기록 여부는 표시 단위와 무관하게 확인하며, 수집된 값이 낮다고 미사용·저성과로 판단하지 않습니다.</Insight>
         </Card>
       </div>
     </div>

@@ -1,6 +1,6 @@
 import { connectDb, UsageDaily } from "@/lib/db";
 import { isoDaysAgo } from "@/lib/date";
-import { ACTIVE_USER_EXPR, TOKENS_EXPR } from "@/lib/queries";
+import { ACTIVE_USER_EXPR, TOKENS_EXPR, REQUESTS_EXPR } from "@/lib/queries";
 import { claimOnce, releaseClaim } from "@/lib/cron";
 
 interface ToolWeek {
@@ -23,7 +23,7 @@ async function toolTotals(
       $group: {
         _id: "$tool",
         tokens: { $sum: TOKENS_EXPR },
-        requests: { $sum: { $ifNull: ["$requests", 0] } },
+        requests: { $sum: REQUESTS_EXPR },
         sessions: { $sum: { $ifNull: ["$sessions", 0] } },
         users: { $addToSet: ACTIVE_USER_EXPR },
       },
@@ -43,7 +43,7 @@ function fmt(n: number): string {
 }
 
 function delta(current: number, previous: number): string {
-  if (previous === 0) return current > 0 ? "(new)" : "";
+  if (previous === 0) return `(이전 관측값 0 → ${fmt(current)}, 비교 조건 확인 필요)`;
   const pct = Math.round(((current - previous) / previous) * 100);
   return `(${pct >= 0 ? "+" : ""}${pct}% WoW)`;
 }
@@ -61,6 +61,7 @@ export async function buildWeeklyReport(): Promise<string> {
 
   const lines = [
     `*token-forest 주간 리포트* (${weekAgo} ~ ${isoDaysAgo(1)})`,
+    "수집된 기록의 합계입니다. 미수집 범위가 있으며, 증감은 성과·역량·도입 수준의 판정이 아닙니다.",
     "",
   ];
   if (current.length === 0) {
@@ -69,7 +70,7 @@ export async function buildWeeklyReport(): Promise<string> {
   }
   for (const t of current.sort((a, b) => b.tokens - a.tokens)) {
     const prev = previous.get(t.tool);
-    const parts = [`활성 ${t.activeUsers}명`];
+    const parts = [`기록 확인 ${t.activeUsers}명`];
     if (t.tokens > 0)
       parts.push(`토큰 ${fmt(t.tokens)} ${delta(t.tokens, prev?.tokens ?? 0)}`);
     if (t.requests > 0)
@@ -83,7 +84,7 @@ export async function buildWeeklyReport(): Promise<string> {
     { $match: { date: { $gte: weekAgo, $lt: today } } },
     { $group: { _id: null, users: { $addToSet: ACTIVE_USER_EXPR } } },
   ]);
-  lines.push("", `전체 주간 활성 사용자: ${overall?.users?.length ?? 0}명`);
+  lines.push("", `주간 기록 확인 인원: ${overall?.users?.length ?? 0}명`);
   return lines.join("\n");
 }
 

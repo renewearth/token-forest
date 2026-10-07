@@ -2,6 +2,7 @@ import type { Connector } from "./types";
 import { anthropicConnector } from "./anthropic";
 import { copilotConnector } from "./copilot";
 import { cursorConnector } from "./cursor";
+import { geminiWorkspaceConnector } from "./gemini-workspace";
 
 // Connector registry. Adding a tool (OpenCode, Alibaba Cloud, ...) means
 // adding one file that exports a Connector and listing it here.
@@ -12,6 +13,7 @@ const connectors: Connector[] = [
   cursorConnector,
   anthropicConnector,
   copilotConnector,
+  geminiWorkspaceConnector,
 ];
 
 export function allConnectors(): Connector[] {

@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { UsageLink } from "./UsageLink";
 import { usePathname } from "next/navigation";
 
 const NAV = [
@@ -11,7 +11,9 @@ const NAV = [
   { href: "/knowhow", label: "노하우" },
   { href: "/members", label: "구성원" },
   { href: "/manual", label: "수동 입력" },
+  { href: "/pricing", label: "단가표" },
   { href: "/setup", label: "설치 안내" },
+  { href: "/collection", label: "수집 상태" },
 ];
 
 function isActive(pathname: string, href: string): boolean {
@@ -22,11 +24,11 @@ function isActive(pathname: string, href: string): boolean {
 export default function Nav() {
   const pathname = usePathname();
   return (
-    <nav className="flex gap-1 text-sm">
+    <nav className="flex min-w-0 flex-wrap gap-1 text-sm">
       {NAV.map((item) => {
         const active = isActive(pathname, item.href);
         return (
-          <Link
+          <UsageLink
             key={item.href}
             href={item.href}
             aria-current={active ? "page" : undefined}
@@ -37,7 +39,7 @@ export default function Nav() {
             }
           >
             {item.label}
-          </Link>
+          </UsageLink>
         );
       })}
     </nav>

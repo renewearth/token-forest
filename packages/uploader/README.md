@@ -1,16 +1,86 @@
 # @token-forest/uploader
 
+## Protocol 3 reliability preview
+
+The existing command still uses collection v2. Protocol 3 is selected only with
+`--reliable`; it sends source records to `/api/ingest/records`, persists an
+atomic local outbox, and never falls back to older ingest endpoints. The server
+acknowledges each exact record key and digest. Conflicted or rejected entries
+remain in the outbox for review. The machine ID is the same persisted random
+UUID used by the existing uploader; record identity never includes that ID.
+
+For a local, read-only inventory run:
+
+```sh
+token-forest-upload --reliable-manifest --source-root /path/to/synthetic-or-local-home
+```
+
+This prints only keys, digests, timestamps, numeric counters, evidence, and
+source health. It does not read uploader config or credentials, create device
+state, call an API, or query usage limits. `--opencode-db /path/to/opencode.db`
+selects a read-only SQLite fixture. Codex checks both `.codex/sessions` and
+`.codex/archived_sessions` under the source root; repeat `--codex-dir /path`
+for other explicit rollout directories. The manifest reports checked and
+present location counts without revealing paths. Do not put credentials in the command line
+when generating a manifest. A source without an explicit account namespace is
+reported as `unverified:default`; it cannot support a fully verified cutover.
+
+Configure each source's stable logical account namespace with repeated
+`--account claude_code=account-id` flags, or `reliableAccounts` in
+`~/.config/token-forest/config.json`. The namespace must describe the logical
+source account consistently across machines; it must not contain a host, path,
+or device ID. Use `--reliable-reconcile` with server credentials to compare a
+read-only local manifest to stored key/digest receipts. This comparison is
+limited to the selected local records and makes no global completeness claim.
+
+```sh
+token-forest-upload --reliable --server https://meter.example.com --token TOKEN
+```
+
+The reliable scan emits Claude message/request events, OpenCode message events,
+Codex and Gemini cumulative observations, and Grok wrapper events. Codex and
+Gemini send raw cumulative total input (including cached input) and cached
+input separately. The server derives uncached input in source order. Their
+request counts are unknown because snapshots do not prove them. Grok lines
+without native IDs use an explicit unverified line fallback; line insertion
+can change those IDs. Claude's native message/request pair identifies an event
+when its account namespace is configured. Its event chain is stable across fork
+copies; the original session attribution remains unknown and no session count
+is claimed from those event chains.
+The local outbox and receipt files live
+in `TOKEN_FOREST_STATE_DIR` (default `~/.token-forest`).
+Reliable upload requires Python 3 with the standard `fcntl` module on macOS
+or Linux. A small helper holds a kernel file lock while the Node uploader runs;
+the kernel releases it after normal exit or process death.
+
+The uploader package ships its protocol hash implementation inside
+`src/reliable/records.mjs`. The server imports that same source through
+`packages/protocol/records.mjs`, keeping installed tarballs self-contained.
+Version 0.3.0 sends a source build hash and parser health with each run. A
+10-minute launchd template is in `examples/reliable-10-minute.plist`. It has
+placeholders for absolute Node and CLI paths and does not install or enable a
+schedule. Review source account mapping and protocol 3 receipts before using it.
+
 Local uploader CLI for [token-forest](../../). It reads your on-disk **Claude
-Code** session transcripts (`~/.claude/projects/**/*.jsonl`) and your **Codex
-CLI** session rollouts (`~/.codex/sessions/**/rollout-*.jsonl`), aggregates
-daily per-model token totals, and pushes them to a token-forest server.
+Code** transcripts (`~/.claude/projects/**/*.jsonl`), **Codex CLI** rollouts
+(`~/.codex/sessions/**/rollout-*.jsonl`), **Gemini CLI**, **Grok** and
+**opencode** (`$XDG_DATA_HOME/opencode/opencode.db`, else
+`~/.local/share/opencode/opencode.db`; read-only; any provider
+you connected, e.g. Copilot Pro+) logs, builds **session-grained** rows and
+pushes them to a token-forest server. The server max-merges each field per
+session, so a session seen on several machines (or replicated by a sync tool)
+counts once. Install the uploader on every machine you use.
 
 Use this if you run Claude Code and/or Codex CLI on a **personal** account —
 there's no central API to poll, so each member uploads their own usage.
 
 - Dependency-free: plain Node 22 ESM, no build step, no `npm install`.
-- Idempotent: the server upserts by `(date, tool, model, member)`, so running it
-  repeatedly (e.g. daily) never double-counts.
+- Idempotent: the server merges session rows per field (max), so re-sending an
+  overlap never double-counts.
+- One run at a time per state dir (run lock); a run with nothing to send still
+  sends a heartbeat so `/me` knows the device is alive.
+- Old servers: if the server rejects the v2 format, the uploader switches to
+  the v1 daily format automatically.
 - Reads transcripts as streams and skips malformed lines, so it's safe to run
   over a large `~/.claude` directory.
 
@@ -50,17 +120,23 @@ Preview what would be sent (no credentials or network needed):
 npx token-forest-upload --dry-run
 ```
 
-Upload the last 30 days (default):
+Upload (default window = change cursor: every local log on the first run and
+at least weekly, otherwise from one KST day before the last successful upload;
+state in `~/.token-forest/cursor.json`, folder overridable with
+`TOKEN_FOREST_STATE_DIR`):
 
 ```bash
 npx token-forest-upload
 ```
 
-Limit the scan to a start date (UTC):
+Limit the scan to a start date (KST; ignores and keeps the cursor):
 
 ```bash
 npx token-forest-upload --since 2026-07-01
 ```
+
+First run = full backfill of all local logs. `TOKEN_FOREST_SINCE=YYYY-MM-DD`
+(optional, team-wide) only raises the lower bound of the window.
 
 ### Options
 
@@ -68,30 +144,29 @@ npx token-forest-upload --since 2026-07-01
 |------|-------------|
 | `--server <url>` | token-forest server base URL |
 | `--token <token>` | per-member ingest token |
-| `--since <YYYY-MM-DD>` | only scan usage on/after this UTC date (default: 30 days ago) |
-| `--machine-id <id>` | label this machine's usage (default: this host's short name) |
+| `--since <YYYY-MM-DD>` | only scan usage on/after this KST date (default: the change cursor decides) |
+| `--full` | resend every local log now (stamps the cursor's weekly full resend) |
+| `--device-label <name>` | your own name for this machine (≤32 chars), shown only on your /me; or `"deviceLabel"` in config.json. Never auto-filled |
+| `--machine-id <id>` | override this machine's pseudonymous id (default: the random device-id UUID persisted at `~/.token-forest/device-id`; the host name is never used or sent) |
 | `--claude-dir <dir>` | extra Claude config dir (repeatable) — track limits for multiple accounts kept in per-account `CLAUDE_CONFIG_DIR` profiles; env: `TOKEN_FOREST_CLAUDE_DIRS` (comma/colon-separated); or `"claudeDirs": ["~/.claude-team"]` in config.json (survives cron/hook runs) |
 | `--limits-only` | refresh only the plan-limit snapshot, skipping the usage scan (fast) |
 | `--no-limits` | skip the Claude plan rate-limit snapshot |
-| `--dry-run` | print the aggregated rows and send nothing |
+| `--dry-run` | print per-tool session counts, token sums and parser health; send nothing, cursor untouched |
 | `-h`, `--help` | show help |
 
 ### Machine identity (multi-machine safe)
 
-If you run Claude Code on more than one machine under the same member, each
-upload is tagged with a **machineId** so their daily totals **add up** instead
-of overwriting each other. The server's uniqueness key is
-`(date, tool, model, member, machineId)`.
+Each upload carries a **machineId** (a random per-device id kept in the state
+dir; `--device-label` is only a display name). Sessions are deduplicated by
+session, so the same session on two machines is counted once, while different
+sessions add up.
 
-- The default machineId is this host's short name (`os.hostname()`, lowercased,
-  domain stripped, `[a-z0-9._-]`, ≤64 chars).
-- Override it with `--machine-id <id>` or the `TOKEN_FOREST_MACHINE_ID` env var —
-  useful for ephemeral hosts (CI, containers) whose hostname changes each run.
-  Give **each machine a stable, distinct id**; reusing one id across machines
-  makes their usage overwrite rather than sum.
-
-Re-running on the same machine stays idempotent: the same machineId upserts the
-same rows.
+- The default machineId is a random id persisted at `<state dir>/device-id`
+  (the hostname is never sent).
+- Override it with `--machine-id <id>` or `TOKEN_FOREST_MACHINE_ID` for
+  ephemeral hosts (CI, containers). Keep it stable and distinct per machine.
+- State folder (`device-id`, `cursor.json`, `claude-attr.json`, `run.lock`):
+  `~/.token-forest`, or `TOKEN_FOREST_STATE_DIR`.
 
 ### Claude plan limits (unofficial API)
 
@@ -174,12 +249,9 @@ refresh degrades to the usual per-dir warning.
 
 ### What gets sent
 
-One row per `(UTC date, model, tool)` with source `uploader`: summed `input` /
-`output` / `cacheRead` / `cacheCreation` tokens, deduped request count, and
-distinct sessions active that day. Rows are tagged `tool: "claude_code"` for
-Claude Code transcripts and `tool: "codex"` for Codex CLI rollouts — both are
-scanned and sent in the same run (see "Adding another tool" below for how the
-codex parser is wired in). Your identity is taken from the ingest token —
+One row per `(tool, session, hour, model)`: `input` / `output` / `cacheRead` /
+`cacheCreation` tokens and request count. `tool` is `claude_code`, `codex`,
+`gemini`, `grok` or `opencode`; all are scanned in the same run. Your identity is taken from the ingest token —
 `externalId` is filled in by the server (your member email), so nothing
 personally identifying beyond model/token counts leaves your machine.
 
@@ -197,7 +269,7 @@ secrets sit in the hook):
         "hooks": [
           {
             "type": "command",
-            "command": "npx --yes token-forest-upload --since $(date -u -d '2 days ago' +%F) >/dev/null 2>&1 &"
+            "command": "npx --yes token-forest-upload >/dev/null 2>&1 &"
           }
         ]
       }
@@ -206,15 +278,20 @@ secrets sit in the hook):
 }
 ```
 
-The trailing `&` backgrounds the upload so it never delays your shell, and the
-short `--since` window keeps each run fast. Because uploads are idempotent, an
-overlapping window is harmless.
+The trailing `&` backgrounds the upload so it never delays your shell. The
+change cursor keeps each run small, and the run lock makes overlapping runs
+harmless.
+
+## Reconciliation
+
+`node packages/uploader/src/scripts/audit-local.mjs` tallies this machine's
+local logs per tool x KST date without sessionizing (read-only, numbers only)
+to compare against server values.
 
 ## Adding another tool
 
 Each tool's parser is isolated in its own file under `src/parsers/` and
-exports `{ tool, aggregate }`. `src/parsers/claude-code.mjs` handles Claude
-Code transcripts; `src/parsers/codex.mjs` is a sibling parser with the same
-shape that handles Codex CLI rollouts — `cli.mjs` runs both and merges their
-rows before printing/uploading. Adding another tool means adding another
-sibling parser file; the CLI wiring stays the same.
+exports `{ tool, aggregate }` (`claude-code`, `codex`, `gemini`, `grok`,
+`opencode`). `cli.mjs` runs all of them and merges their session rows. Adding
+another tool means adding a sibling parser file and one line to `PARSERS` in
+`cli.mjs`.

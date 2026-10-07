@@ -2,19 +2,7 @@
 // overview. A member may own several Claude accounts (1:N), so snapshots are
 // grouped by accountEmail, with one bar per rate-limit window under each.
 import type { LimitSnapshot } from "@/lib/queries";
-
-function windowLabel(window: string): string {
-  switch (window) {
-    case "five_hour":
-      return "5시간 창";
-    case "seven_day":
-      return "7일 창";
-    case "seven_day_opus":
-      return "7일 창 (Opus)";
-    default:
-      return window;
-  }
-}
+import { organizationLabels, windowLabel } from "@/lib/limit-window";
 
 // "3분 전" / "2시간 전" — snapshot freshness. Server-rendered; minute precision
 // is enough for a metric that changes on upload cadence.
@@ -78,10 +66,22 @@ export function LimitBar({ limit }: { limit: LimitSnapshot }) {
 // render each login's windows. Distinct emails are separate accounts; the
 // same email under two organizations is two plans of one account (e.g. a
 // personal Max subscription and a Team premium seat) and gets two blocks.
-export function AccountLimits({ limits }: { limits: LimitSnapshot[] }) {
+// Codex logins are per device ("device:…" org, shown as "기기 N"); pass the
+// member's machineIds to match the /me devices table numbering.
+export function AccountLimits({
+  limits,
+  machineIds,
+}: {
+  limits: LimitSnapshot[];
+  machineIds?: string[];
+}) {
   const logins = [
     ...new Set(limits.map((l) => `${l.accountEmail}|${l.organization}`)),
   ].sort();
+  const orgLabels = organizationLabels(
+    limits.map((l) => l.organization),
+    machineIds,
+  );
   return (
     <div className="space-y-5">
       {logins.map((login) => {
@@ -97,7 +97,9 @@ export function AccountLimits({ limits }: { limits: LimitSnapshot[] }) {
             <div className="mb-2 flex items-baseline gap-2 text-xs">
               <span className="font-medium text-[var(--text-primary)]">{account}</span>
               {organization && (
-                <span className="text-[var(--text-secondary)]">{organization}</span>
+                <span className="text-[var(--text-secondary)]">
+                  {orgLabels.get(organization) ?? organization}
+                </span>
               )}
               {tier && <span className="text-[var(--text-muted)]">{tier}</span>}
               {agoLabel(rows[0]?.updatedAt ?? null) && (

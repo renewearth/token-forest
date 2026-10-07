@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { formatCompact, formatNumber } from "@/app/_lib/ui";
+import { formatUsage } from "@/app/_lib/usage-format";
+import type { TokenBasis, Unit } from "@/lib/units";
 import { useNumStyle } from "@/app/_components/NumStyleProvider";
 
 const DOW = ["월", "화", "수", "목", "금", "토", "일"];
@@ -10,23 +11,25 @@ const DOW = ["월", "화", "수", "목", "금", "토", "일"];
 // surface, magnitude deepens the same hue. sqrt keeps a few busy cells from
 // flattening the rest. Zero cells get a neutral tint so the grid stays legible
 // without reading as low usage.
-function cellColor(value: number, max: number): string {
+function cellColor(value: number | null, max: number): string {
+  if (value === null) return "transparent";
   if (value <= 0) return "color-mix(in srgb, var(--text-muted) 20%, transparent)";
   const pct = 30 + 70 * Math.sqrt(value / max);
   return `color-mix(in srgb, var(--series-1) ${pct}%, transparent)`;
 }
 
-export function Heatmap({ matrix }: { matrix: number[][] }) {
+export function Heatmap({ matrix, unit = "raw", basis = "all" }: { matrix: Array<Array<number | null>>; unit?: Unit; basis?: TokenBasis }) {
   const numStyle = useNumStyle();
   const [hover, setHover] = useState<{
     dow: number;
     hour: number;
-    value: number;
+    value: number | null;
     x: number;
     y: number;
   } | null>(null);
 
-  const max = Math.max(1, ...matrix.flat());
+  const observedValues = matrix.flat().filter((v): v is number => v !== null);
+  const max = Math.max(0, ...observedValues);
   // Header ticks every 3 hours; other columns keep the slot but stay blank.
   const hourLabel = (h: number) => (h % 3 === 0 ? String(h) : "");
 
@@ -57,7 +60,13 @@ export function Heatmap({ matrix }: { matrix: number[][] }) {
               {row.map((value, hour) => (
                 <div
                   key={hour}
-                  className="aspect-square rounded-[2px]"
+                  tabIndex={0}
+                  role="img"
+                  aria-label={`${DOW[dow]} ${hour}시: ${formatUsage(value, unit)} ${value === null ? "수집 미확인" : "수집 합계 · 일부 수집"}`}
+                  title={`${DOW[dow]} ${hour}시: ${formatUsage(value, unit)} · ${value === null ? "수집 미확인" : "일부 수집"}`}
+                  className="aspect-square rounded-[2px] border border-[var(--border)] focus:outline-2"
+                  onFocus={(e) => { const rect = e.currentTarget.getBoundingClientRect(); setHover({ dow, hour, value, x: rect.left, y: rect.top }); }}
+                  onBlur={() => setHover(null)}
                   style={{ background: cellColor(value, max) }}
                   onMouseEnter={(e) =>
                     setHover({
@@ -79,6 +88,7 @@ export function Heatmap({ matrix }: { matrix: number[][] }) {
         </div>
       </div>
 
+      <p className="mt-2 text-xs text-[var(--text-muted)]">빈 칸: 수집 미확인 · 값이 있는 칸: 수집 합계, 일부 수집 · 소스별 기존 시간 버킷 유지</p>
       {/* sequential scale legend */}
       <div className="mt-3 flex items-center gap-2 text-[10px] text-[var(--text-muted)]">
         <span>적음</span>
@@ -91,7 +101,7 @@ export function Heatmap({ matrix }: { matrix: number[][] }) {
             />
           ))}
         </div>
-        <span>많음 · 최대 {formatCompact(max, numStyle)} 토큰</span>
+        <span>많음 · 최대 {formatUsage(observedValues.length ? max : null, unit, numStyle)}{basis === "requests" ? "건" : unit === "usd" ? "" : " 토큰"}</span>
       </div>
 
       {hover && (
@@ -103,7 +113,7 @@ export function Heatmap({ matrix }: { matrix: number[][] }) {
             {DOW[hover.dow]} {String(hover.hour).padStart(2, "0")}시
           </span>
           <span className="ml-2 font-medium tabular-nums text-[var(--text-primary)]">
-            {formatNumber(hover.value)} 토큰
+            {formatUsage(hover.value, unit)}{basis === "requests" ? "건" : unit === "usd" ? "" : " 토큰"} · {hover.value === null ? "수집 미확인" : "일부 수집"}
           </span>
         </div>
       )}

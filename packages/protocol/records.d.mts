@@ -1,0 +1,28 @@
+export declare const METRIC_FIELDS: readonly ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens", "requests"];
+export declare const RECORD_FIELDS: readonly string[];
+export type MetricField = typeof METRIC_FIELDS[number];
+export type FieldEvidence = "known" | "unknown" | "unsupported";
+export type UsageRecord = {
+  tool: "claude_code" | "codex" | "gemini" | "grok" | "opencode";
+  accountId: string;
+  recordId: string;
+  sessionId: string;
+  kind: "event" | "cumulative";
+  occurredAt: string;
+  model: string;
+  provider?: string | null;
+  parserVersion: number;
+  revision: number;
+  completeness: "partial" | "final";
+  identityQuality: "native" | "derived" | "unverified";
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  cacheReadTokens?: number | null;
+  cacheCreationTokens?: number | null;
+  requests?: number | null;
+  fieldEvidence?: Partial<Record<MetricField, FieldEvidence>>;
+};
+export declare function recordKey(record: Pick<UsageRecord, "tool" | "accountId" | "recordId">): string;
+export declare function normalizeRecordSemantics(record: UsageRecord): Required<UsageRecord>;
+export declare function canonicalJson(value: unknown): string;
+export declare function recordDigest(record: UsageRecord): string;

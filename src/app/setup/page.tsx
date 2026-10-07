@@ -42,7 +42,7 @@ const CHANGES: { path: string; desc: string }[] = [
   },
   {
     path: "~/.token-forest/run.sh",
-    desc: "최근 3일치 사용량을 올리는 실행 래퍼. 훅·예약·수동 실행이 모두 이 파일을 호출합니다.",
+    desc: "마지막 업로드 이후 바뀐 사용량을 올리는 실행 래퍼(첫 실행·주 1회는 로컬 기록 전체). 훅·예약·수동 실행이 모두 이 파일을 호출합니다.",
   },
   {
     path: "~/.config/token-forest/config.json",

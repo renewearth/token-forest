@@ -12,20 +12,20 @@ export const METRIC_INFO: Record<string, MetricInfo> = {
   cacheReuse: {
     label: "캐시 재사용 배율",
     meaning: "캐시에 적재한 토큰이 몇 번 재사용됐나 (cacheRead/cacheCreation).",
-    target: "높을수록 캐시 투자 회수가 좋음 — 새로 적재한 컨텍스트를 여러 번 재사용.",
-    trend: "up",
+    target: "작업과 캐시 구조에 따라 달라지는 사용 특성입니다. 개인별 목표값을 두지 않습니다.",
+    trend: "none",
   },
   contextYield: {
     label: "컨텍스트 수율",
     meaning: "새로 끌어온 컨텍스트 대비 생성량 (output/cacheCreation).",
-    target: "높을수록 좋음 — 새로 읽힌 컨텍스트 1토큰당 더 많은 산출을 뽑아냄.",
-    trend: "up",
+    target: "생성 토큰과 캐시 쓰기의 비율입니다. 출력의 품질이나 업무 성과를 측정하지 않습니다.",
+    trend: "none",
   },
   cacheSavings: {
     label: "캐시 절감률",
     meaning: "캐시가 없었을 경우 대비 아낀 가중 자원 비율.",
-    target: "높을수록 좋음. 달러가 아니라 모델 단가 가중 상대치입니다.",
-    trend: "up",
+    target: "공개 단가로 환산한 상대치입니다. 실제 청구 비용이나 개인 역량의 척도가 아닙니다.",
+    trend: "none",
   },
   premiumShare: {
     label: "프리미엄 모델 비중",
@@ -36,7 +36,7 @@ export const METRIC_INFO: Record<string, MetricInfo> = {
   sessionDepth: {
     label: "세션 깊이",
     meaning: "세션당 에이전트 턴 수 (requests/sessions, Claude Code 한정).",
-    target: "무방향 — 높으면 딥워크, 낮으면 잦은 확인. 작업 스타일이라 목표값이 없습니다.",
+    target: "세션의 대화 길이입니다. 길거나 짧다는 사실만으로 작업의 깊이·성공 여부를 판단하지 않습니다.",
     trend: "none",
   },
   requestAnatomy: {
@@ -48,19 +48,19 @@ export const METRIC_INFO: Record<string, MetricInfo> = {
   toolBreadth: {
     label: "도구 다양성",
     meaning: "사용량 가중 도구 분산 (0=단일 도구, 1=완전 균등).",
-    target: "넓을수록 좋음 — 상황별로 맞는 도구를 골라 쓰는 성숙도.",
-    trend: "up",
+    target: "도구 사용 분포입니다. 여러 도구를 사용할 목표를 두지 않습니다.",
+    trend: "none",
   },
   modelBreadth: {
     label: "모델 다양성",
     meaning: "사용량 가중 모델 분산 (0=단일 모델, 1=완전 균등).",
-    target: "넓을수록 좋음 — 작업 성격에 맞는 모델을 골라 쓰는 성숙도.",
-    trend: "up",
+    target: "모델 사용 분포입니다. 모델 수를 늘릴 목표를 두지 않습니다.",
+    trend: "none",
   },
   streak: {
     label: "스트릭",
     meaning: "연속 활동일. 주말·공휴일은 쉬어도 유지되고, 끊겨도 유예창 안에 돌아오면 되살아납니다.",
-    target: "꾸준할수록 좋음 — 습관 정착의 신호.",
-    trend: "up",
+    target: "기존 게임의 연속 기록입니다. 개인 일정·수집 누락·업무 성과를 평가하지 않습니다.",
+    trend: "none",
   },
 };

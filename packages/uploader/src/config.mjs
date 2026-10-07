@@ -10,7 +10,9 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { deviceId } from "./lib/device-id.mjs";
 
-const DEFAULT_SINCE_DAYS = 30;
+// Device label (spec §3.1 "deviceLabel"): the member's own optional name for
+// this machine, shown only on their own /me. Never auto-filled (no hostname).
+export const MAX_DEVICE_LABEL = 32;
 
 export function configPath() {
   return path.join(homedir(), ".config", "token-forest", "config.json");
@@ -28,7 +30,8 @@ function sanitizeMachineId(value) {
 
 // Default machineId: a persisted random device-id (UUID) so a member's uploads
 // from different machines add up instead of overwriting each other — without
-// ever revealing the hostname. Persisted at ~/.token-forest/device-id.
+// ever revealing the hostname. Persisted at $TOKEN_FOREST_STATE_DIR/device-id
+// (default ~/.token-forest/device-id).
 export function defaultMachineId() {
   return deviceId();
 }
@@ -45,6 +48,8 @@ export function parseArgs(argv) {
     claudeDirs: undefined,
     limitsOnly: false,
     digest: true,
+    full: false,
+    deviceLabel: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -61,6 +66,12 @@ export function parseArgs(argv) {
         break;
       case "--machine-id":
         flags.machineId = argv[++i] ?? null;
+        break;
+      case "--device-label":
+        flags.deviceLabel = argv[++i] ?? null;
+        break;
+      case "--full":
+        flags.full = true;
         break;
       case "--claude-dir": {
         const v = argv[++i];
@@ -89,6 +100,7 @@ export function parseArgs(argv) {
         else if (arg.startsWith("--token=")) flags.token = arg.slice(8);
         else if (arg.startsWith("--since=")) flags.since = arg.slice(8);
         else if (arg.startsWith("--machine-id=")) flags.machineId = arg.slice(13);
+        else if (arg.startsWith("--device-label=")) flags.deviceLabel = arg.slice(15);
         else throw new Error(`unknown argument: ${arg}`);
     }
   }
@@ -114,9 +126,10 @@ async function readConfigFile() {
       digestRepos: Array.isArray(json.digestRepos)
         ? json.digestRepos.filter((d) => typeof d === "string")
         : [],
+      deviceLabel: typeof json.deviceLabel === "string" ? json.deviceLabel : null,
     };
   } catch {
-    return { serverUrl: null, token: null, claudeDirs: null, digest: true, digestRepos: [] };
+    return { serverUrl: null, token: null, claudeDirs: null, digest: true, digestRepos: [], deviceLabel: null };
   }
 }
 
@@ -143,21 +156,40 @@ export function resolveClaudeDirs(flagDirs, fileDirs) {
   return [...new Set([...defaults, ...dirs])];
 }
 
-// Convert a "--since" value into an inclusive YYYY-MM-DD lower bound.
-// Precedence: --since flag > TOKEN_FOREST_SINCE env > N days ago (UTC).
-// The env form lets an admin set a team-wide tracking epoch (backfill start)
-// without every member typing a flag.
-export function resolveSince(sinceFlag, days = DEFAULT_SINCE_DAYS) {
-  const explicit = sinceFlag ?? process.env.TOKEN_FOREST_SINCE ?? null;
-  if (explicit) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(explicit)) {
-      throw new Error(`since must be YYYY-MM-DD, got: ${explicit}`);
-    }
-    return explicit;
+function checkDate(v, what) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) throw new Error(`${what} must be YYYY-MM-DD, got: ${v}`);
+  return v;
+}
+
+// The --since flag: an explicit inclusive YYYY-MM-DD (KST date) lower bound,
+// or null (then the change cursor decides — see lib/cursor.mjs). An explicit
+// window ignores the cursor and leaves it untouched.
+export function resolveSince(sinceFlag) {
+  return sinceFlag ? checkDate(sinceFlag, "since") : null;
+}
+
+// TOKEN_FOREST_SINCE env: a team-wide tracking epoch. It only raises the
+// start of the cursor-derived window (lib/cursor.mjs applySinceFloor); the
+// cursor still advances normally. null when unset.
+export function resolveSinceFloor() {
+  const v = (process.env.TOKEN_FOREST_SINCE ?? "").trim();
+  return v ? checkDate(v, "TOKEN_FOREST_SINCE") : null;
+}
+
+// Device label: flag > config file. Trimmed; empty → none; longer than
+// MAX_DEVICE_LABEL → a config error (never silently cut).
+export function resolveDeviceLabel(flagLabel, fileLabel) {
+  const raw = flagLabel ?? fileLabel ?? null;
+  if (raw === null) return null;
+  const label = String(raw).trim();
+  if (label === "") return null;
+  if (label.length > MAX_DEVICE_LABEL) {
+    throw new Error(
+      `device label must be at most ${MAX_DEVICE_LABEL} characters (got ${label.length}): ` +
+        `shorten --device-label or "deviceLabel" in ${configPath()}`,
+    );
   }
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() - days);
-  return d.toISOString().slice(0, 10);
+  return label;
 }
 
 // Merge flags, env, and config file into the effective settings.
@@ -173,6 +205,9 @@ export async function resolveConfig(flags) {
     serverUrl: serverUrl ? serverUrl.replace(/\/+$/, "") : null,
     token,
     since: resolveSince(flags.since),
+    sinceFloor: resolveSinceFloor(),
+    full: Boolean(flags.full),
+    deviceLabel: resolveDeviceLabel(flags.deviceLabel, file.deviceLabel),
     machineId: machineIdOverride
       ? sanitizeMachineId(machineIdOverride)
       : defaultMachineId(),

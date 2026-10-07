@@ -15,7 +15,7 @@ import type { WeeklySeriesPoint } from "@/lib/scorecard";
 export type ModelAdoptionDisplay = {
   model: string;
   globalFirst: string;
-  leadDays: number | null; // null = 팀 절반 미도달("확산 중")
+  leadDays: number | null; // null = 팀 절반 미도달("집계 미확인")
 };
 
 export type TeamScorecardProps = {
@@ -107,7 +107,7 @@ export default function TeamScorecard({
   return (
     <div className="space-y-6 text-sm">
       <section>
-        <h3 className="text-xs font-semibold text-[var(--text-muted)]">효율</h3>
+        <h3 className="text-xs font-semibold text-[var(--text-muted)]">캐시와 출력 특성</h3>
         {cacheSavingsPct != null ? (
           <p className="mt-1 flex items-baseline gap-2">
             <span className="text-2xl font-semibold tabular-nums text-[var(--text-primary)]">
@@ -153,13 +153,13 @@ export default function TeamScorecard({
           />
         </div>
         <p className="mt-2 text-[11px] text-[var(--text-muted)]">
-          컨텍스트 수율은 새로 읽힌 컨텍스트(cacheCreation) 1토큰당 산출량입니다 — 높을수록 끌어온 맥락을 알차게 씁니다.
+          컨텍스트 수율은 새로 읽힌 컨텍스트(cacheCreation) 1토큰당 산출량입니다 — 값의 높낮이는 업무 성과를 뜻하지 않습니다.
           프리미엄 모델 비중은 무방향 지표입니다 — 높다고 나쁜 게 아니라 작업 난이도의 반영일 수 있습니다.
         </p>
       </section>
 
       <section>
-        <h3 className="text-xs font-semibold text-[var(--text-muted)]">숙련</h3>
+        <h3 className="text-xs font-semibold text-[var(--text-muted)]">세션 특성</h3>
         <TrendPair
           title="세션 깊이 (턴/세션 · Claude Code 한정)"
           data={sessionDepth}
@@ -172,7 +172,7 @@ export default function TeamScorecard({
           무방향 지표입니다 — 값이 높거나 낮다고 좋고 나쁨을 뜻하지 않습니다. 작업 스타일의 차이로 읽으세요.
         </p>
 
-        <h4 className="mt-4 text-xs font-medium text-[var(--text-secondary)]">신모델 채택</h4>
+        <h4 className="mt-4 text-xs font-medium text-[var(--text-secondary)]">모델의 수집 기록</h4>
         {modelAdoption.length ? (
           <table className="mt-1 w-full text-sm">
             <thead>
@@ -188,7 +188,7 @@ export default function TeamScorecard({
                   <td className="py-2">{m.model}</td>
                   <td className="py-2 text-[var(--text-secondary)]">{m.globalFirst}</td>
                   <td className="py-2 text-right tabular-nums">
-                    {m.leadDays != null ? `${m.leadDays}일` : "확산 중"}
+                    {m.leadDays != null ? `${m.leadDays}일` : "집계 미확인"}
                   </td>
                 </tr>
               ))}
@@ -201,7 +201,7 @@ export default function TeamScorecard({
 
       {rampAvg && (
         <section>
-          <h3 className="text-xs font-semibold text-[var(--text-muted)]">습관화 — 온보딩 램프업</h3>
+          <h3 className="text-xs font-semibold text-[var(--text-muted)]">온보딩 이후 수집 기록</h3>
           <p className="mt-1 text-xs text-[var(--text-muted)]">
             최근 12주 내 온보딩한 {cohortSize}명 평균 · 온보딩 후 주차별 활동일
           </p>
@@ -229,7 +229,7 @@ export default function TeamScorecard({
       )}
 
       <section>
-        <h3 className="text-xs font-semibold text-[var(--text-muted)]">확장</h3>
+        <h3 className="text-xs font-semibold text-[var(--text-muted)]">사용 모델</h3>
         <div className="mt-2">
           <TrendPair
             title="모델 다양성"
@@ -243,7 +243,7 @@ export default function TeamScorecard({
         </div>
         <p className="mt-1 text-[11px] text-[var(--text-muted)]">
           사용량 가중 엔트로피 — 한 모델에 몰릴수록 0, 여러 모델을 고루 쓸수록 1에 가깝습니다.
-          도구 다양성<InfoTip info={METRIC_INFO.toolBreadth} /> 추세는 위 &ldquo;도입 확산&rdquo; 섹션(도입 매트릭스·주간 활성)을 참조하세요.
+          도구 다양성<InfoTip info={METRIC_INFO.toolBreadth} /> 추세는 위 &ldquo;수집된 사용 기록&rdquo; 섹션(도입 매트릭스·주간 활성)을 참조하세요.
         </p>
       </section>
     </div>
