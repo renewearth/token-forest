@@ -3,8 +3,8 @@ export const dynamic = "force-dynamic";
 import { UsageLink } from "@/app/_components/UsageLink";
 import {
   getUsageObservationSnapshot,
-  getSyncFreshness,
 } from "@/lib/queries";
+import { getUsageFreshness } from "@/lib/collection-history";
 import { loadPriceTable } from "@/lib/price-table";
 import { resolveUnitSelection } from "@/lib/units";
 import {
@@ -43,7 +43,7 @@ export default async function OverviewPage({
   const sel = resolveUnitSelection(await loadPriceTable(), params);
 
   const [snapshot, freshness] = await Promise.all([
-    getUsageObservationSnapshot(range, sel), getSyncFreshness(),
+    getUsageObservationSnapshot(range, sel), getUsageFreshness(),
   ]);
   const { totals, tools: tokensByTool, people: tokensByMember } = snapshot;
   const unitKeep = { unit: sel.unit, ref: sel.ref ?? undefined, basis: sel.basis };
@@ -84,48 +84,45 @@ export default async function OverviewPage({
         <LimitsOverview className="lg:col-span-2" />
 
         <Card
-          title="데이터 신선도"
-          hint="최근 조회와 수신한 사용일 · KST"
+          title="데이터 수신 현황"
+          hint="사용일은 원본의 일별 기준 · 수신·조회 시각은 KST"
           className="lg:col-span-1 lg:col-start-3"
         >
           <div className="mb-2 flex justify-end">
-            <SyncNowButton />
+            <SyncNowButton readOnly={process.env.TOKEN_FOREST_READ_ONLY === "1"} />
           </div>
           {freshness.length ? (
             <ul className="space-y-2 text-sm">
               {freshness.map((f) => (
                 <li
                   key={f.tool}
-                  className="flex items-center justify-between gap-2 border-t border-black/5 py-2 first:border-0 dark:border-white/5"
+                  className="space-y-2 border-t border-black/5 py-3 first:border-0 dark:border-white/5"
                 >
                   <span className="flex items-center gap-2">
                     <span
                       className="inline-block h-2 w-2 rounded-full"
                       style={{
                         background:
-                          f.status === "error" ? "var(--series-6)" : f.status === "ok" ? "var(--series-4)" : "var(--text-muted)",
+                          f.apiStatus === "error" ? "var(--series-6)" : f.apiStatus === "ok" ? "var(--series-4)" : "var(--text-muted)",
                       }}
                     />
                     {toolLabel(f.tool)}
                   </span>
-                  <span className="text-right text-xs text-[var(--text-muted)]">
-                    {f.status === "partial" ? "일부 기간 미수신 · " : f.status === "empty" ? "자료 미수신 · " : f.status === "error" ? "조회 실패 · " : "조회 완료 · "}
-                    {f.lastSyncedDate ? `최근 사용일 ${f.lastSyncedDate} · ` : ""}
-                    {formatTimestamp(f.ranAt)}
-                  </span>
+                  <dl className="space-y-1 text-xs text-[var(--text-muted)]">
+                    <div className="flex flex-wrap justify-between gap-x-2"><dt>최근 사용일</dt><dd>{f.latestUsageDate ?? "수신 이력 미확인"}</dd></div>
+                    <div className="flex flex-wrap justify-between gap-x-2"><dt>마지막 기록 수신</dt><dd>{f.lastReceivedAt ? formatTimestamp(f.lastReceivedAt) : "미확인"}</dd></div>
+                    <div className="flex flex-wrap justify-between gap-x-2"><dt>API 최근 조회</dt><dd>{f.apiCheckedAt ? formatTimestamp(f.apiCheckedAt) : "조회 이력 없음"}</dd></div>
+                    {f.apiStatus && <div><dt className="sr-only">API 조회 결과</dt><dd>{f.apiStatus === "partial" ? "일부 기간 미수신" : f.apiStatus === "empty" ? "API 자료 미수신" : f.apiStatus === "error" ? "API 조회 실패" : "API 조회 완료"}</dd></div>}
+                  </dl>
                 </li>
               ))}
             </ul>
           ) : (
-            <EmptyState message="자동 동기화 기록이 없습니다. 수동 입력만 사용 중일 수 있습니다." />
+            <EmptyState message="사용 기록 수신과 API 조회 이력이 확인되지 않았습니다. 사용량 0을 뜻하지 않습니다." />
           )}
           <p className="mt-3 text-[11px] text-[var(--text-muted)]">
-            서버가 매 정시에 자동 동기화하며, 버튼은 Cursor·Copilot만 즉시
-            갱신합니다. Claude Code 사용량·한도는 각 구성원 기기에서 매 정시 자동
-            업로드됩니다.
-            소스별 날짜 기준이 다를 수 있습니다. Claude Code 업로더는 KST, Cursor·Copilot은
-            소스의 리포트일(UTC)을 따라 자정 부근 하루가 어긋날 수 있습니다. 새로 설치한 기기의 Claude
-            Code 과거 이력은 최대 약 30일까지만 소급됩니다.
+            API 조회와 기기에서 보낸 기록의 수신은 별개입니다. 수신 이력만으로 모든 기기의 기록이 빠짐없이 수집됐다고 판단하지 않습니다.
+            사용일은 원본의 날짜 기준을 유지합니다. Claude Code 업로더는 KST, Cursor·Copilot 보고서는 UTC 기준이라 자정 부근 날짜가 다를 수 있습니다.
           </p>
         </Card>
       </div>
