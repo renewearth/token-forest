@@ -6,12 +6,13 @@ import { useRouter } from "next/navigation";
 // Fires POST /api/sync (poller connectors only) and re-renders the page so
 // the freshness card reflects the new run. Claude Code usage/limits are
 // uploaded from member machines and can't be pulled from here.
-export function SyncNowButton() {
+export function SyncNowButton({ readOnly = false }: { readOnly?: boolean }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
   async function syncNow() {
+    if (readOnly) return;
     setBusy(true);
     setNote(null);
     try {
@@ -40,13 +41,14 @@ export function SyncNowButton() {
   }
 
   return (
-    <span className="inline-flex items-center gap-2">
+    <span className="inline-flex flex-wrap items-center justify-end gap-2">
+      {readOnly && <span className="text-xs text-[var(--text-muted)]">조회 전용 미리보기에서는 동기화할 수 없습니다</span>}
       {note && <span className="text-xs text-[var(--text-muted)]">{note}</span>}
       <button
         type="button"
         onClick={syncNow}
-        disabled={busy}
-        className="rounded-lg border border-black/10 px-2.5 py-1 text-xs text-[var(--text-secondary)] transition-colors hover:bg-black/5 disabled:cursor-wait disabled:opacity-60 dark:border-white/10 dark:hover:bg-white/5"
+        disabled={busy || readOnly}
+        className="rounded-lg border border-black/10 px-2.5 py-1 text-xs text-[var(--text-secondary)] transition-colors hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:hover:bg-white/5"
       >
         {busy ? "동기화 중…" : "지금 동기화"}
       </button>
