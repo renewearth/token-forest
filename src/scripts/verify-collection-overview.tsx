@@ -43,7 +43,10 @@ try {
   const codex = rows.find(r => r.id === "codex")!;
   check("duplicate receipt across devices remains one source record", () => { assert.equal(codex.records, 1); assert.equal(codex.devices.length, 2); });
   check("newer healthy device never masks other device read error", () => { assert.equal(codex.label, "읽기 오류 확인"); assert.equal(codex.attention, true); });
-  check("parser heartbeat without records does not invent tool receipt time", () => { assert.equal(rows.find(r => r.id === "claude_code")!.lastReceiptAt, null); });
+  check("parser heartbeat without records does not invent tool receipt time", () => {
+    assert.equal(data.sourceStatus.find(s => s.tool === "claude_code")!.lastReceiptAt, null);
+    assert.equal(rows.find(r => r.id === "claude_code")!.lastReceiptAt, null);
+  });
   check("unknown queue remains unknown while explicit zero remains zero", () => {
     assert.equal(data.deviceStatus.find(d => d.pending === null)?.reportedRejected, null);
     const html = renderToStaticMarkup(<CollectionRows data={data} />);

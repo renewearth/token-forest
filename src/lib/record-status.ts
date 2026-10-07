@@ -42,8 +42,8 @@ export async function getCollectionStatus(memberId: Types.ObjectId) {
     source.locationsChecked = h.locationsChecked ?? null;
     source.locationsPresent = h.locationsPresent ?? null;
     source.healthStatus = h.error ? "error" : h.readErrors || h.linesUnrecognized ? "partial" : h.filesScanned === 0 ? "empty" : "ok";
-    const at = device.lastReceiptAt.toISOString();
-    if (!source.lastReceiptAt || source.lastReceiptAt < at) source.lastReceiptAt = at;
+    // Parser heartbeat is device health, not receipt of this tool's records.
+    // Its timestamp remains available under deviceStatus.lastReceiptAt.
   }
   const generations = new Map(derived.map((d) => [JSON.stringify([d.tool, d.accountId, d.sessionId]), d.generation]));
   const staleChains = chains.filter((c) => generations.get(JSON.stringify([c.tool, c.accountId, c.sessionId])) !== c.generation).length;
