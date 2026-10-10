@@ -1,4 +1,5 @@
 import mongoose, { Schema, type Model, type Types } from "mongoose";
+import type { DateBasis, FieldEvidence } from "@/lib/types";
 
 // Field semantics mirror the original relational schema: usage_daily holds
 // DAILY TOTALS per (date, tool, model, externalId) — upserts replace, never add.
@@ -32,7 +33,7 @@ export interface MemberIdentityDoc {
 
 export interface UsageDailyDoc {
   _id: Types.ObjectId;
-  date: string; // YYYY-MM-DD (UTC)
+  date: string; // YYYY-MM-DD in dateBasis; older rows may not record it
   tool: string; // open set: cursor, claude_code, codex, copilot, ...
   model: string; // "" when the source has no model breakdown
   externalId: string;
@@ -44,6 +45,8 @@ export interface UsageDailyDoc {
   cacheCreationTokens: number | null;
   requests: number | null;
   sessions: number | null;
+  fieldEvidence?: FieldEvidence;
+  dateBasis?: DateBasis;
   costEstimateCents: number | null;
   source: string; // poller | uploader | manual
   raw: unknown;
@@ -53,7 +56,11 @@ export interface UsageDailyDoc {
 export interface SyncRunDoc {
   _id: Types.ObjectId;
   tool: string;
+  connectorTool?: string;
   lastSyncedDate: string | null; // last day fully covered by the sync
+  retrySince?: string | null; // earliest unresolved window, retained across failures
+  lastCheckedDate?: string | null;
+  emptyScopeCount?: number;
   status: string; // ok | error
   message: string | null;
   ranAt: Date;
@@ -75,7 +82,7 @@ export interface CronMarkerDoc {
 // heatmap / hourly drill-down and NEVER summed with usage_daily.
 export interface UsageHourlyDoc {
   _id: Types.ObjectId;
-  hour: string; // "YYYY-MM-DDTHH" (UTC)
+  hour: string; // "YYYY-MM-DDTHH" in dateBasis
   tool: string;
   model: string;
   externalId: string;
@@ -86,7 +93,73 @@ export interface UsageHourlyDoc {
   cacheReadTokens: number | null;
   cacheCreationTokens: number | null;
   requests: number | null;
+  fieldEvidence?: FieldEvidence;
+  dateBasis?: DateBasis;
   source: string;
+  updatedAt: Date;
+}
+
+// Collection v2: session-grained usage, the uploader's source of truth. Key =
+// (externalId, tool, sessionId, hour, model). The same session file can be
+// uploaded from several machines (Syncthing copies, `--resume` elsewhere), so
+// value fields MAX-merge instead of adding; a higher parserVersion overwrites
+// (lets a parser fix LOWER numbers). usagedailies/usagehourlies uploader rows
+// are DERIVED from this collection (machineId "sessions", src/lib/sessions.ts).
+export interface UsageSessionDoc {
+  _id: Types.ObjectId;
+  externalId: string;
+  memberId: Types.ObjectId | null;
+  tool: string;
+  sessionId: string; // tool-prefixed, unique within a tool
+  hour: string; // "YYYY-MM-DDTHH" (KST, uploader convention)
+  date: string; // hour.slice(0, 10)
+  model: string;
+  provider: string; // "" when the tool reports none
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheCreationTokens: number | null;
+  requests: number | null;
+  fieldEvidence?: FieldEvidence;
+  dateBasis?: DateBasis;
+  parserVersion: number;
+  machineIds: string[]; // pseudonymous devices that reported it — display only
+  updatedAt: Date;
+}
+
+// Backup of v1 uploader daily rows displaced by session coverage (spec §0.1:
+// moved, not flagged — reversible, and existing usagedailies queries need no
+// filter). Same shape as a usagedailies document plus divertedAt.
+export interface UsageDailyLegacyDoc extends Omit<UsageDailyDoc, "_id"> {
+  _id: Types.ObjectId;
+  divertedAt: Date;
+}
+
+// One reading of one uploader parser on one device (spec §3.3).
+export interface DeviceHealthEntry {
+  parser: string;
+  filesScanned: number;
+  linesUnrecognized: number;
+  sessionsEmitted: number;
+  error: string | null; // why the parser was skipped, null = ran
+  at: Date;
+}
+
+// A v2 uploader device of one member, keyed (externalId, machineId).
+// machineId is pseudonymous (anonymizeMachineId) — hostnames are never
+// stored; label is the member's own optional name ("맥북"), null = unnamed.
+// health = latest reading per parser; healthHistory = per parser at most one
+// sample per 12h over the last 7 days, capped at 14 per parser — the baseline
+// for "parser suddenly stopped recognizing" warnings (src/lib/ingest.ts).
+export interface DeviceDoc {
+  _id: Types.ObjectId;
+  externalId: string;
+  machineId: string;
+  label: string | null;
+  uploaderVersion: string;
+  lastSeenAt: Date;
+  health: DeviceHealthEntry[];
+  healthHistory: DeviceHealthEntry[];
   updatedAt: Date;
 }
 
@@ -155,6 +228,28 @@ export interface ReactionDoc {
   createdAt: Date;
 }
 
+// One price version of one model family (USD per 1M tokens). Pure type and
+// matching rules: ModelPrice in src/lib/pricing.ts. Key (provider, family,
+// effectiveFrom) — a price change is a new row, never an edit, so past usage
+// keeps the price that was in effect.
+export interface ModelPriceDoc {
+  _id: Types.ObjectId;
+  family: string;
+  match: string[];
+  provider: string; // "" = every provider
+  priority: number;
+  effectiveFrom: string; // YYYY-MM-DD
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  sourceUrl: string;
+  checkedAt: string; // YYYY-MM-DD
+  note: string;
+  registeredBy: string;
+  createdAt: Date;
+}
+
 const memberSchema = new Schema<MemberDoc>(
   {
     name: { type: String, required: true },
@@ -200,6 +295,8 @@ const usageDailySchema = new Schema<UsageDailyDoc>(
     cacheCreationTokens: { type: Number, default: null },
     requests: { type: Number, default: null },
     sessions: { type: Number, default: null },
+    fieldEvidence: { type: Schema.Types.Mixed },
+    dateBasis: { type: String, enum: ["KST", "UTC", "미확인"] },
     costEstimateCents: { type: Number, default: null },
     source: { type: String, required: true },
     raw: { type: Schema.Types.Mixed, default: null },
@@ -213,6 +310,8 @@ usageDailySchema.index(
 usageDailySchema.index({ tool: 1, date: 1 });
 usageDailySchema.index({ memberId: 1, date: 1 });
 usageDailySchema.index({ date: 1 });
+// Per-member uploader machines (getMyMachines, every /me render + wizard poll).
+usageDailySchema.index({ externalId: 1, source: 1, machineId: 1, date: 1 });
 
 const usageHourlySchema = new Schema<UsageHourlyDoc>(
   {
@@ -227,6 +326,8 @@ const usageHourlySchema = new Schema<UsageHourlyDoc>(
     cacheReadTokens: { type: Number, default: null },
     cacheCreationTokens: { type: Number, default: null },
     requests: { type: Number, default: null },
+    fieldEvidence: { type: Schema.Types.Mixed },
+    dateBasis: { type: String, enum: ["KST", "UTC", "미확인"] },
     source: { type: String, required: true },
   },
   { timestamps: { createdAt: false, updatedAt: true } },
@@ -237,6 +338,95 @@ usageHourlySchema.index(
 );
 usageHourlySchema.index({ memberId: 1, hour: 1 });
 usageHourlySchema.index({ hour: 1 });
+
+const usageSessionSchema = new Schema<UsageSessionDoc>(
+  {
+    externalId: { type: String, required: true },
+    memberId: { type: Schema.Types.ObjectId, ref: "Member", default: null },
+    tool: { type: String, required: true },
+    sessionId: { type: String, required: true },
+    hour: { type: String, required: true },
+    date: { type: String, required: true },
+    model: { type: String, default: "" },
+    provider: { type: String, default: "" },
+    inputTokens: { type: Number, default: null },
+    outputTokens: { type: Number, default: null },
+    cacheReadTokens: { type: Number, default: null },
+    cacheCreationTokens: { type: Number, default: null },
+    requests: { type: Number, default: null },
+    fieldEvidence: { type: Schema.Types.Mixed },
+    dateBasis: { type: String, enum: ["KST", "UTC", "미확인"] },
+    parserVersion: { type: Number, required: true },
+    machineIds: { type: [String], default: [] },
+  },
+  { timestamps: { createdAt: false, updatedAt: true }, collection: "usagesessions" },
+);
+usageSessionSchema.index(
+  { externalId: 1, tool: 1, sessionId: 1, hour: 1, model: 1 },
+  { unique: true },
+);
+usageSessionSchema.index({ externalId: 1, tool: 1, date: 1 });
+// Per-device recent tokens (getMyMachines); multikey on machineIds.
+usageSessionSchema.index({ externalId: 1, machineIds: 1, date: 1 });
+
+const usageDailyLegacySchema = new Schema<UsageDailyLegacyDoc>(
+  {
+    date: { type: String, required: true },
+    tool: { type: String, required: true },
+    model: { type: String, default: "" },
+    externalId: { type: String, required: true },
+    machineId: { type: String, default: "" },
+    memberId: { type: Schema.Types.ObjectId, ref: "Member", default: null },
+    inputTokens: { type: Number, default: null },
+    outputTokens: { type: Number, default: null },
+    cacheReadTokens: { type: Number, default: null },
+    cacheCreationTokens: { type: Number, default: null },
+    requests: { type: Number, default: null },
+    sessions: { type: Number, default: null },
+    fieldEvidence: { type: Schema.Types.Mixed },
+    dateBasis: { type: String, enum: ["KST", "UTC", "미확인"] },
+    costEstimateCents: { type: Number, default: null },
+    source: { type: String, required: true },
+    raw: { type: Schema.Types.Mixed, default: null },
+    // Original usagedailies updatedAt is copied verbatim (timestamps off).
+    updatedAt: { type: Date, default: null },
+    divertedAt: { type: Date, required: true },
+  },
+  { timestamps: false, collection: "usagedailylegacies" },
+);
+// Same identity as usagedailies: a v1 row re-sent after diversion replaces its
+// backup (daily totals overwrite) instead of piling up duplicates.
+usageDailyLegacySchema.index(
+  { date: 1, tool: 1, model: 1, externalId: 1, machineId: 1 },
+  { unique: true },
+);
+usageDailyLegacySchema.index({ externalId: 1, source: 1, machineId: 1, date: 1 });
+
+const deviceHealthEntrySchema = new Schema<DeviceHealthEntry>(
+  {
+    parser: { type: String, required: true },
+    filesScanned: { type: Number, required: true },
+    linesUnrecognized: { type: Number, required: true },
+    sessionsEmitted: { type: Number, required: true },
+    error: { type: String, default: null },
+    at: { type: Date, required: true },
+  },
+  { _id: false },
+);
+
+const deviceSchema = new Schema<DeviceDoc>(
+  {
+    externalId: { type: String, required: true },
+    machineId: { type: String, required: true },
+    label: { type: String, default: null },
+    uploaderVersion: { type: String, required: true },
+    lastSeenAt: { type: Date, required: true },
+    health: { type: [deviceHealthEntrySchema], default: [] },
+    healthHistory: { type: [deviceHealthEntrySchema], default: [] },
+  },
+  { timestamps: { createdAt: false, updatedAt: true }, collection: "devices" },
+);
+deviceSchema.index({ externalId: 1, machineId: 1 }, { unique: true });
 
 const limitSnapshotSchema = new Schema<LimitSnapshotDoc>(
   {
@@ -293,7 +483,11 @@ digestSchema.index({ date: 1, memberId: 1 }, { unique: true });
 const syncRunSchema = new Schema<SyncRunDoc>(
   {
     tool: { type: String, required: true },
+    connectorTool: { type: String },
     lastSyncedDate: { type: String, default: null },
+    retrySince: { type: String, default: null },
+    lastCheckedDate: { type: String, default: null },
+    emptyScopeCount: { type: Number, default: 0 },
     status: { type: String, required: true },
     message: { type: String, default: null },
   },
@@ -333,6 +527,26 @@ const reactionSchema = new Schema<ReactionDoc>(
 reactionSchema.index({ postId: 1, memberId: 1, emoji: 1 }, { unique: true });
 reactionSchema.index({ postId: 1 });
 
+const modelPriceSchema = new Schema<ModelPriceDoc>(
+  {
+    family: { type: String, required: true },
+    match: { type: [String], default: [] },
+    provider: { type: String, default: "" },
+    priority: { type: Number, required: true },
+    effectiveFrom: { type: String, required: true },
+    input: { type: Number, required: true },
+    output: { type: Number, required: true },
+    cacheRead: { type: Number, required: true },
+    cacheWrite: { type: Number, required: true },
+    sourceUrl: { type: String, required: true },
+    checkedAt: { type: String, required: true },
+    note: { type: String, default: "" },
+    registeredBy: { type: String, required: true },
+  },
+  { timestamps: { createdAt: true, updatedAt: false } },
+);
+modelPriceSchema.index({ provider: 1, family: 1, effectiveFrom: 1 }, { unique: true });
+
 // Hot-reload-safe model registration (Next dev recompiles modules).
 function model<T>(name: string, schema: Schema<T>): Model<T> {
   return (mongoose.models[name] as Model<T>) ?? mongoose.model<T>(name, schema);
@@ -342,9 +556,13 @@ export const Member = model("Member", memberSchema);
 export const MemberIdentity = model("MemberIdentity", memberIdentitySchema);
 export const UsageDaily = model("UsageDaily", usageDailySchema);
 export const UsageHourly = model("UsageHourly", usageHourlySchema);
+export const UsageSession = model("UsageSession", usageSessionSchema);
+export const UsageDailyLegacy = model("UsageDailyLegacy", usageDailyLegacySchema);
+export const Device = model("Device", deviceSchema);
 export const LimitSnapshot = model("LimitSnapshot", limitSnapshotSchema);
 export const Digest = model("Digest", digestSchema);
 export const SyncRun = model("SyncRun", syncRunSchema);
 export const CronMarker = model("CronMarker", cronMarkerSchema);
 export const Post = model("Post", postSchema);
 export const Reaction = model("Reaction", reactionSchema);
+export const ModelPrice = model("ModelPrice", modelPriceSchema);

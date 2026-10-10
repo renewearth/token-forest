@@ -23,6 +23,9 @@ const globalForDb = globalThis as unknown as {
 export function connectDb(): Promise<typeof mongoose> {
   return (globalForDb.__tokenMeterMongo ??= mongoose.connect(mongoUri(), {
     serverSelectionTimeoutMS: 5000,
+    ...(process.env.TOKEN_FOREST_READ_ONLY === "1"
+      ? { autoCreate: false, autoIndex: false }
+      : {}),
   }));
 }
 

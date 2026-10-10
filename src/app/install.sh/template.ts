@@ -24,6 +24,7 @@ set -euo pipefail
 # ─── injected by the server ─────────────────────────────────────────────
 SERVER_URL='${safe}'
 DASHBOARD_URL='${safeDashboard}'
+# BACKFILL_START: v2 업로더부터 쓰지 않음(첫 실행이 로컬 기록 전체를 보냄). 호환용으로만 남김.
 BACKFILL_START='${safeBackfill}'
 
 # ─── 출력 헬퍼 (한글) ────────────────────────────────────────────────────
@@ -148,14 +149,14 @@ NODE_EOF
   ok "설정 저장: $CONFIG_FILE"
 fi
 
-# ─── 실행 래퍼: 최근 3일치를 업로드. 훅·예약·수동 실행이 모두 이걸 호출 ──
+# ─── 실행 래퍼: 마지막 성공 이후 바뀐 사용량을 업로드. 훅·예약·수동 실행이 모두 이걸 호출 ──
 cat > "$RUNNER" <<RUNNER_EOF
 #!/usr/bin/env sh
-# token-forest 업로더 실행 래퍼 (install.sh 가 생성). 최근 3일치 사용량을 업로드합니다.
+# token-forest 업로더 실행 래퍼 (install.sh 가 생성). 업로더의 변경 커서(~/.token-forest/cursor.json)가
+# 범위를 정합니다 — 첫 실행·주 1회는 로컬 기록 전체, 그 외는 마지막 성공 전날부터.
 NODE_BIN='$NODE_BIN'
 CLI='$CLI'
-SINCE="\\$("\\$NODE_BIN" -e 'const d=new Date();d.setUTCDate(d.getUTCDate()-3);process.stdout.write(d.toISOString().slice(0,10))')"
-exec "\\$NODE_BIN" "\\$CLI" --since "\\$SINCE" "\\$@"
+exec "\\$NODE_BIN" "\\$CLI" "\\$@"
 RUNNER_EOF
 chmod +x "$RUNNER"
 
@@ -256,24 +257,21 @@ install_cron() {
   fi
 }
 
-info "매시 정각 자동 업로드를 예약하는 중..."
-if [ "$PLATFORM" = "macos" ]; then install_launchd; else install_cron; fi
-
 # ─── 지금 한 번 업로드 (출력 표시) ───────────────────────────────────────
+# 커서가 없는 첫 실행 = 로컬 기록 전체 1회 전송(따로 소급 실행 없음). 예약(launchd
+# RunAtLoad·cron)은 이 실행이 끝난 뒤에 등록해, 전체 스캔 두 개가 동시에 돌지 않게 한다.
 echo
-info "지금 한 번 업로드해 사용량을 확인합니다..."
+info "지금 한 번 업로드해 사용량을 확인합니다 (첫 실행은 로컬 기록 전체)..."
 set +e
-if [ -n "$BACKFILL_START" ]; then
-  info "설치 첫 업로드는 팀 추적 시작일($BACKFILL_START)까지 소급 수집합니다..."
-  "$RUNNER" --since "$BACKFILL_START"
-else
-  "$RUNNER"
-fi
+"$RUNNER"
 RUN_STATUS=$?
 set -e
 if [ "$RUN_STATUS" -ne 0 ]; then
   warn "첫 업로드가 실패했습니다 (종료코드 $RUN_STATUS). 네트워크·토큰을 확인한 뒤 '$RUNNER' 를 직접 실행해 재시도할 수 있습니다."
 fi
+
+info "매시 정각 자동 업로드를 예약하는 중..."
+if [ "$PLATFORM" = "macos" ]; then install_launchd; else install_cron; fi
 
 # ─── 완료 안내 ───────────────────────────────────────────────────────────
 echo

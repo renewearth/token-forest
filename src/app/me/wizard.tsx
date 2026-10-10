@@ -12,7 +12,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { MachineStatus, UnmappedRow } from "@/lib/queries";
-import { deviceLabels } from "@/lib/machine-id";
+import { deviceLabels } from "@/lib/device-labels";
 import { Card } from "@/app/_components/ui";
 import { formatNumber, toolLabel } from "@/app/_lib/ui";
 import {
@@ -38,7 +38,7 @@ const stepTitle = "mb-3 text-base font-semibold text-[var(--text-primary)]";
 
 type StepId = "tools" | "auto" | "claude" | "copilot" | "custom" | "done";
 
-const STANDARD_TOOLS = new Set(["cursor", "claude_code", "codex", "gemini", "grok", "copilot"]);
+const STANDARD_TOOLS = new Set(["cursor", "claude_code", "codex", "gemini", "grok", "opencode", "copilot"]);
 
 const TOOL_OPTIONS: Array<{ key: string; label: string; recommended?: boolean }> = [
   { key: "cursor", label: "Cursor" },
@@ -46,6 +46,7 @@ const TOOL_OPTIONS: Array<{ key: string; label: string; recommended?: boolean }>
   { key: "codex", label: "Codex CLI" },
   { key: "gemini", label: "Gemini CLI" },
   { key: "grok", label: "Grok CLI" },
+  { key: "opencode", label: "OpenCode" },
   { key: "copilot", label: "GitHub Copilot" },
 ];
 
@@ -57,7 +58,8 @@ function buildSteps(prefs: string[]): StepId[] {
     prefs.includes("claude_code") ||
     prefs.includes("codex") ||
     prefs.includes("gemini") ||
-    prefs.includes("grok")
+    prefs.includes("grok") ||
+    prefs.includes("opencode")
   )
     steps.push("claude");
   if (prefs.includes("copilot")) steps.push("copilot");
@@ -69,7 +71,7 @@ function buildSteps(prefs: string[]): StepId[] {
 // Checklist row click passes a tool name ("claude_code", "copilot", …); map it
 // to the wizard step that handles that tool for standalone re-runs.
 function stepForTool(tool: string): StepId {
-  if (tool === "claude_code" || tool === "codex" || tool === "gemini" || tool === "grok")
+  if (tool === "claude_code" || tool === "codex" || tool === "gemini" || tool === "grok" || tool === "opencode")
     return "claude";
   if (tool === "copilot") return "copilot";
   if (tool === "cursor") return "auto";
@@ -226,17 +228,24 @@ export function OnboardingWizard(props: {
   }
 
   // ---- step 3 state: install auto-detection (10s poll, this step only)
+  // Baseline = every machineId getMyMachines already lists: v2 Device docs and
+  // legacy uploader machines share one pseudonymous id space, so a new v2
+  // device (first upload or heartbeat creates its Device doc) shows up as a
+  // machineId not in this set.
   const baseline = useRef(new Set(props.machines.map((m) => m.machineId)));
   const [detected, setDetected] = useState<string | null>(null);
-  // Pseudonymous "기기 N" label for the just-detected device — never show the
-  // raw machineId (device-id UUID) in the confirmation.
+  const [detectedLabel, setDetectedLabel] = useState<string | null>(null);
+  // The member's own device name if the uploader sent one, else the
+  // pseudonymous "기기 N" label — never show the raw machineId (device-id UUID)
+  // in the confirmation.
   const machineLabelMap = useMemo(
     () =>
+      // Unlabelled machines only — same numbering as the /me device table.
       deviceLabels([
-        ...props.machines.map((m) => m.machineId),
-        ...(detected ? [detected] : []),
+        ...props.machines.filter((m) => !m.label).map((m) => m.machineId),
+        ...(detected && !detectedLabel ? [detected] : []),
       ]),
-    [props.machines, detected],
+    [props.machines, detected, detectedLabel],
   );
   useEffect(() => {
     if (currentStep !== "claude" || detected) return;
@@ -248,7 +257,10 @@ export function OnboardingWizard(props: {
         const fresh = (data.machines as MachineStatus[]).find(
           (m) => !baseline.current.has(m.machineId),
         );
-        if (fresh) setDetected(fresh.machineId);
+        if (fresh) {
+          setDetectedLabel(fresh.label ?? null);
+          setDetected(fresh.machineId);
+        }
       } catch {
         /* transient network error — next tick retries */
       }
@@ -457,12 +469,12 @@ export function OnboardingWizard(props: {
           </ol>
           <p className="mt-2 text-xs text-[var(--text-muted)]">
             이 설치는 Codex CLI(<code>~/.codex</code>)·Gemini CLI(<code>~/.gemini</code>)·Grok
-            (<code>~/.local/share/grok-usage.jsonl</code>) 사용량도 함께 수집합니다 — 별도 설치가
+            (<code>~/.local/share/grok-usage.jsonl</code>)·OpenCode(<code>opencode.db</code>, Copilot Pro+ 포함) 사용량도 함께 수집합니다 — 별도 설치가
             필요 없어요.
           </p>
           {detected ? (
             <div className="mt-4 rounded-lg border border-[var(--series-4)]/50 bg-[var(--series-4)]/5 p-3 text-sm font-medium text-[var(--series-4)]">
-              ✅ {machineLabelMap.get(detected) ?? detected} 연결 확인됨!
+              ✅ {detectedLabel ?? machineLabelMap.get(detected) ?? detected} 연결 확인됨!
             </div>
           ) : (
             <div className="mt-4 rounded-lg border border-dashed border-black/15 p-3 text-sm text-[var(--text-muted)] dark:border-white/15">
@@ -533,7 +545,7 @@ export function OnboardingWizard(props: {
               <strong>Plan: Read-only</strong>만 선택 → Generate token
             </p>
             <p className="text-xs text-[var(--text-muted)]">
-              저장하면 6월 1일부터의 사용량이 자동으로 소급 수집됩니다.
+              개인이 결제하는 계정의 과금 보고서용입니다. 관리자가 개인 보고서 수집을 설정한 뒤 수신 여부를 확인할 수 있습니다. 회사에서 결제하는 라이선스는 조직 관리자 연결이 필요합니다.
             </p>
             <CopilotForm />
           </div>

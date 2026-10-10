@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import Link from "next/link";
+import { UsageLink } from "@/app/_components/UsageLink";
 import Image from "next/image";
 import Banner from "@/app/_components/onboarding/Banner";
 import Nav from "@/app/_components/Nav";
@@ -23,7 +23,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "token-forest",
-  description: "token-forest — 팀의 AI 도구 사용량을 나무로 키우는 대시보드",
+  description: "token-forest — 팀의 AI 사용 흐름과 업무 실험을 함께 보는 대시보드",
 };
 
 export default async function RootLayout({
@@ -40,8 +40,8 @@ export default async function RootLayout({
       <body className="min-h-full">
         <NumStyleProvider initial={numStyle}>
           <header className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--surface-1)]/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur">
-            <div className="mx-auto flex max-w-6xl items-center gap-6 px-6 py-3">
-              <Link href="/" className="flex items-center gap-2.5" aria-label="token-forest — 홈">
+            <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-4 py-3 sm:px-6">
+              <UsageLink href="/" className="flex items-center gap-2.5" aria-label="token-forest — 홈">
                 <Image
                   src="/forest-emblem.png"
                   alt="token-forest"
@@ -55,7 +55,7 @@ export default async function RootLayout({
                     token-forest
                   </span>
                 </span>
-              </Link>
+              </UsageLink>
               <Nav />
               <div className="ml-auto">
                 <NumStyleToggle />

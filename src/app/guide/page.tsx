@@ -1,93 +1,25 @@
-import { PageHeader, Card } from "@/app/_components/ui";
+import Link from "next/link";
 import { STAGE_LEGEND, milestoneGroups, STATE_LEGEND } from "@/lib/forest-symbols";
-import { STREAK_CATALOG } from "@/lib/growth";
+import { PageHeader, Card } from "@/app/_components/ui";
 
-// 숲 기호·성장 규칙 전체 참조. 정적 데이터라 동적 마킹 불필요.
 export default function GuidePage() {
-  const groups = milestoneGroups();
-  const streak = [...STREAK_CATALOG].sort((a, b) => a.days - b.days);
-  const chip = "rounded-full bg-[var(--surface-2)] px-2.5 py-1 text-sm";
-  return (
-    <div>
-      <PageHeader title="도감" />
-      <p className="-mt-4 mb-6 text-xs text-[var(--text-muted)]">숲에 뜨는 기호와 성장 규칙 안내</p>
-      <div className="space-y-4">
-        <Card title="나무 단계">
-          <div className="flex flex-wrap gap-2">
-            {STAGE_LEGEND.map((s) => (
-              <span key={s.label} className={chip}>
-                {s.emoji} {s.label}
-                {s.threshold !== undefined ? ` · ${s.threshold} GP 이상` : " · 활동 전"}
-              </span>
-            ))}
-          </div>
-        </Card>
-
-        <Card title="마일스톤">
-          <div className="space-y-3">
-            {groups.map((g) => (
-              <div key={g.axis}>
-                <div className="text-sm font-semibold text-[var(--text-primary)]">
-                  {g.axisLabel}{" "}
-                  <span className="font-normal text-[var(--text-muted)]">— {g.meaning}</span>
-                </div>
-                <div className="mt-1 flex flex-wrap gap-2">
-                  {g.tiers.map((t) => (
-                    <span key={t.emoji} className={chip}>
-                      {t.emoji} {t.label}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        <Card title="상태">
-          <div className="space-y-1 text-sm text-[var(--text-secondary)]">
-            {STATE_LEGEND.map((s) => (
-              <div key={s.emoji}>
-                {s.emoji} <b className="text-[var(--text-primary)]">{s.label}</b> — {s.meaning}
-              </div>
-            ))}
-            <div>
-              🌳 <b className="text-[var(--text-primary)]">활력</b> — 오늘 활동한 나무는 밝고 경쾌하게,
-              3일+ 쉬면 흐릿하게 조는다.
-            </div>
-          </div>
-        </Card>
-
-        <Card title="성장 규칙">
-          <div className="space-y-2 text-sm text-[var(--text-secondary)]">
-            <p>
-              활동한 날마다 <b className="text-[var(--text-primary)]">10 GP × 스트릭 배수 + 효율 보너스</b>
-              (최대 +5)가 쌓인다.
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {streak.map((s) => (
-                <span key={s.days} className="rounded-full bg-[var(--surface-2)] px-2 py-0.5 text-xs">
-                  {s.days}일 ×{s.mult}
-                </span>
-              ))}
-            </div>
-            <p>
-              효율 보너스 = <b className="text-[var(--text-primary)]">컨텍스트 수율</b>(산출 ÷ 새로 끌어온
-              컨텍스트) 밴드 + 도구 다양성.
-            </p>
-            <p>
-              스트릭이 끊겨도 <b className="text-[var(--text-primary)]">🟠 불씨</b>로 남는다. 유예창
-              <b className="text-[var(--text-primary)]"> 2 영업일</b> 안에 돌아오면 되살아난다 —
-              주말·공휴일 끊김은 <b className="text-[var(--text-primary)]">다음 영업일 한 번</b>이면 자동
-              연결(주말·공휴일 페널티 없음), 그 외엔 자격 활동 2일. 성취로 모은
-              <b className="text-[var(--text-primary)]"> 🎟️ 복구 토큰</b>(최대 2)은 못 돌아온 스트릭을
-              자동으로 되살린다.
-            </p>
-            <p className="font-semibold text-[var(--accent-strong)]">
-              토큰을 많이 쓴다고 나무가 크지 않는다 — 꾸준함과 효율만 반영된다.
-            </p>
-          </div>
-        </Card>
-      </div>
-    </div>
-  );
+  return <div className="space-y-4">
+    <PageHeader title="표시와 집계 안내" />
+    <Card title="팀의 숲"><p>기존 성장형 숲을 보여줍니다. 나무 단계·레벨·연속 기록·장식은 게임 규칙에 따라 표시되며, 배경과 동물은 시간대에 따라 달라집니다. 이름을 누르면 구성원별 사용 흐름을 볼 수 있습니다.</p></Card>
+    <Card title="숲의 기호"><div className="space-y-3 text-sm">
+      <div><h3 className="mb-1 font-medium">나무 단계</h3><div className="flex flex-wrap gap-2">{STAGE_LEGEND.map(s => <span key={s.label}>{s.emoji} {s.label}{s.threshold !== undefined ? ` · ${s.threshold} GP 이상` : " · 기록 전"}</span>)}</div></div>
+      {milestoneGroups().map(g => <div key={g.axis}><h3 className="mb-1 font-medium">{g.axisLabel} — {g.meaning}</h3><div className="flex flex-wrap gap-2">{g.tiers.map(t => <span key={t.emoji}>{t.emoji} {t.label}</span>)}</div></div>)}
+      <div><h3 className="mb-1 font-medium">상태</h3>{STATE_LEGEND.map(s => <p key={s.emoji}>{s.emoji} {s.label} — {s.meaning}</p>)}</div>
+      <p>게임 표시는 업무 성과나 숙련도 평가가 아닙니다. 수집되지 않은 기록은 게임에도 반영되지 않을 수 있습니다.</p>
+    </div></Card>
+    <Card title="수집된 사용량"><div className="space-y-2 text-sm">
+      <p>전체 처리량은 일반 입력·캐시 읽기·캐시 쓰기·출력의 수집 합계입니다. 집계 기준과 단위는 합계·그래프·표에 함께 적용됩니다.</p>
+      <p>요청 수는 소스가 제공한 건수입니다. 사람의 질문 횟수나 완료한 업무 수와 같지 않습니다.</p>
+      <p>—는 확인할 수 없는 값입니다. 수집된 부분합이 있어도 기록되지 않은 도구·기기의 실제 사용을 알 수 없으므로 전체 실제 사용량이라고 단정하지 않습니다.</p>
+      <p>USD는 공개 단가에 따른 추정값이며 청구 금액이나 구독료가 아닙니다. 기준 모델 토큰도 가격을 활용한 환산값입니다.</p>
+      <p>구성원 선을 숨겨도 수집된 전체 합계선은 바뀌지 않습니다. 사용량의 증가·감소가 성과의 증가·감소를 뜻하지 않습니다.</p>
+    </div></Card>
+    <Card title="업무 실험과 적용 후기"><p className="text-sm">업무 문제·방법·결과와 한계를 선택해 기록합니다. 악화·판단 유보·중단도 공유할 수 있습니다. 초안은 본인만 읽고, 공개 대상을 확인한 뒤 직접 공유합니다. 동료의 후기는 실제 적용한 조건과 함께 읽어 주세요.</p></Card>
+    <Card title="개인의 기존 게임 기록"><p className="text-sm">기존 성장 계산과 원본 기록은 유지됩니다. 본인의 <Link className="underline" href="/me">내 사용량</Link>에서 접힌 ‘기존 성장 보기’를 열 수 있습니다. 게임 보너스와 복구 규칙은 업무 성과를 평가하거나 필요한 AI 사용량을 정하는 기준이 아닙니다.</p></Card>
+  </div>;
 }

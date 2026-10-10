@@ -12,6 +12,7 @@ import {
 } from "@/lib/auth";
 import {
   getLatestLimits,
+  getMemberBreakdown,
   getMyMachines,
   getUnmappedExternalIds,
   TOKENS_EXPR,
@@ -21,16 +22,18 @@ import {
 } from "@/lib/queries";
 import {
   formatNumber,
+  formatTimestamp,
   parseDays,
   rangeForDays,
   toolLabel,
 } from "@/app/_lib/ui";
 import { getNumStyle } from "@/app/_lib/numfmt";
 import { deviceLabels } from "@/lib/machine-id";
-import { Card, EmptyState, PageHeader, RangeTabs } from "@/app/_components/ui";
+import { Card, EmptyState, PageHeader } from "@/app/_components/ui";
 import { AccountLimits } from "@/app/_components/limits";
 import { MemberUsagePanel } from "@/app/_components/MemberUsagePanel";
 import GrowthCard from "./GrowthCard";
+import MyExperiments from "@/app/_components/MyExperiments";
 import Scorecard from "./Scorecard";
 import {
   ClaimButton,
@@ -42,14 +45,18 @@ import {
   RegisterCard,
 } from "./client";
 import { OnboardingWizard } from "./wizard";
+import { loadPriceTable } from "@/lib/price-table";
+import { resolveUnitSelection, unitLabel, unpricedNote, type TokenBasis, type Unit, type SelectionParams } from "@/lib/units";
+import { UnitPicker } from "@/app/_components/UnitPicker";
+import { formatUsage } from "@/app/_lib/usage-format";
 
 // ---- data -------------------------------------------------------------------
 
-type RecentUsage = { tokens: number; requests: number };
+type RecentUsage = { tokens: number; requests: number; unpricedTokens?: number };
 
 // Tools with dedicated checklist rows / wizard steps; everything else in
 // toolPrefs is a custom tool (manual entry or a future connector).
-const STANDARD_TOOLS = new Set(["cursor", "claude_code", "codex", "gemini", "grok", "copilot"]);
+const STANDARD_TOOLS = new Set(["cursor", "claude_code", "codex", "gemini", "grok", "opencode", "copilot"]);
 
 type MemberOnboarding = {
   toolPrefs: string[];
@@ -61,6 +68,7 @@ type MemberOnboarding = {
   codexConnected: boolean;
   geminiConnected: boolean;
   grokConnected: boolean;
+  opencodeConnected: boolean;
   recentByTool: Map<string, RecentUsage>;
   myLimits: LimitSnapshot[];
   unmapped: UnmappedRow[];
@@ -87,6 +95,7 @@ async function loadOnboarding(
     codexRow,
     geminiRow,
     grokRow,
+    opencodeRow,
     recent,
     limits,
     unmapped,
@@ -111,6 +120,11 @@ async function loadOnboarding(
       }).lean(),
       UsageDaily.findOne({
         tool: "grok",
+        memberId: oid,
+        date: { $gte: r14.from },
+      }).lean(),
+      UsageDaily.findOne({
+        tool: "opencode",
         memberId: oid,
         date: { $gte: r14.from },
       }).lean(),
@@ -164,6 +178,7 @@ async function loadOnboarding(
     codexConnected: Boolean(codexRow),
     geminiConnected: Boolean(geminiRow),
     grokConnected: Boolean(grokRow),
+    opencodeConnected: Boolean(opencodeRow),
     recentByTool,
     myLimits: limits,
     unmapped,
@@ -211,11 +226,66 @@ function ChecklistRow({
   );
 }
 
-function recentLine(u: RecentUsage | undefined): string | null {
-  if (!u || (u.tokens === 0 && u.requests === 0)) return null;
+// One device row of the /me "수집 중인 기기" table, plus a warning row when a
+// parser looks broken or was skipped. The label is the owner's own device
+// name — only this page shows it (team pages keep "기기 N").
+function MachineRows({ machine: m, name, unit }: { machine: MachineStatus; name: string; unit: Unit }) {
+  const badges: Array<{ text: string; tone: string }> = [];
+  if (m.format === "legacy") badges.push({ text: "구 업로더", tone: "text-[var(--text-muted)]" });
+  if (m.stale) badges.push({ text: "24시간 넘게 없음", tone: "text-[var(--series-3)]" });
+  if (badges.length === 0) badges.push({ text: "정상", tone: "text-[var(--series-1)]" });
+  const hasNotes = m.parserWarnings.length > 0 || m.parserErrors.length > 0;
+  return (
+    <>
+      <tr className="border-t border-black/5 dark:border-white/5">
+        <td className="py-1.5">{name}</td>
+        <td className="py-1.5 text-right tabular-nums">
+          {m.lastSeenAt ? formatTimestamp(m.lastSeenAt) : "—"}
+        </td>
+        <td className="py-1.5 text-right tabular-nums">{m.lastDate}</td>
+        <td className="py-1.5 text-right tabular-nums">
+          {formatUsage(m.recentTokens, unit)}
+          {(m.unpricedTokens ?? 0) > 0 && <div className="text-[11px] text-[var(--text-muted)]">{unpricedNote(formatNumber(m.unpricedTokens ?? 0))}</div>}
+        </td>
+        <td className="py-1.5 pl-3">
+          <span className="flex flex-wrap gap-1">
+            {badges.map((b) => (
+              <span
+                key={b.text}
+                className={`whitespace-nowrap rounded-full border border-current px-1.5 py-px text-[11px] ${b.tone}`}
+              >
+                {b.text}
+              </span>
+            ))}
+          </span>
+        </td>
+      </tr>
+      {hasNotes && (
+        <tr>
+          <td colSpan={5} className="pb-1.5">
+            {m.parserWarnings.map((w) => (
+              <div key={w} className="text-[var(--series-6)]">
+                ⚠️ {w}
+              </div>
+            ))}
+            {m.parserErrors.map((e) => (
+              <div key={e} className="pl-5 text-[11px] text-[var(--text-muted)]">
+                {e}
+              </div>
+            ))}
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function recentLine(u: RecentUsage | undefined, unit: Unit, basis: TokenBasis): string | null {
+  if (!u || (u.tokens === 0 && u.requests === 0 && !u.unpricedTokens)) return null;
   const parts: string[] = [];
-  if (u.tokens > 0) parts.push(`${formatNumber(u.tokens)} 토큰`);
+  if (basis !== "requests" && u.tokens > 0) parts.push(`${formatUsage(u.tokens, unit)}${unit === "usd" ? "" : " 토큰"}`);
   if (u.requests > 0) parts.push(`${formatNumber(u.requests)} 요청`);
+  if (u.unpricedTokens) parts.push(unpricedNote(formatNumber(u.unpricedTokens)));
   return `최근 7일: ${parts.join(" · ")}`;
 }
 
@@ -274,10 +344,10 @@ function UnknownView({ email }: { email: string }) {
 
 // Tab bar for the member view: usage data (default) vs connection management.
 // Server-rendered links, mirroring RangeTabs' pill styling.
-function MeTabs({ active }: { active: "usage" | "connect" }) {
+function MeTabs({ active, keep }: { active: "usage" | "connect"; keep: Record<string, string> }) {
   const tabs = [
-    { key: "usage", href: "/me", label: "사용량" },
-    { key: "connect", href: "/me?tab=connect", label: "연결 관리" },
+    { key: "usage", href: `/me?${new URLSearchParams(keep)}`, label: "사용량" },
+    { key: "connect", href: `/me?${new URLSearchParams({ ...keep, tab: "connect" })}`, label: "연결 관리" },
   ] as const;
   return (
     <div className="inline-flex rounded-lg border border-black/10 p-0.5 text-xs dark:border-white/10">
@@ -303,11 +373,13 @@ async function MemberView({
   step,
   tab,
   days,
+  unitParams,
 }: {
   member: { id: string; name: string; email: string; ingestToken: string | null };
   step?: string;
   tab?: string;
   days: number;
+  unitParams: SelectionParams;
 }) {
   const [data, origin, hasCookie, numStyle, h] = await Promise.all([
     loadOnboarding(member.id, member.email),
@@ -326,6 +398,7 @@ async function MemberView({
     codex: data.codexConnected,
     gemini: data.geminiConnected,
     grok: data.grokConnected,
+    opencode: data.opencodeConnected,
     copilot: data.githubConnected,
   };
   const connectedCount =
@@ -338,8 +411,11 @@ async function MemberView({
   const installOrigin = ingestHost ? `https://${ingestHost}` : origin;
   const installCmd = `curl -fsSL ${installOrigin}/install.sh | bash -s -- ${member.ingestToken ?? "<토큰>"}`;
   // Pseudonymous "기기 N" labels — the raw machineId (device-id UUID) is never
-  // shown; deviceLabels also renders the "" placeholder.
-  const machineLabelMap = deviceLabels(data.machines.map((m) => m.machineId));
+  // shown; deviceLabels also renders the "" placeholder. Numbered over the
+  // unlabelled machines only, so a member-named device leaves no gap.
+  const machineLabelMap = deviceLabels(
+    data.machines.filter((m) => !m.label).map((m) => m.machineId),
+  );
 
   // First visit (no onboardedAt) or explicit re-run (?step=…) → wizard.
   const showWizard = !data.onboardedAt || Boolean(step);
@@ -369,13 +445,36 @@ async function MemberView({
   }
 
   const activeTab = tab === "connect" ? "connect" : "usage";
+  const sel = resolveUnitSelection(await loadPriceTable(), unitParams);
+  const keep = { days: String(days), unit: sel.unit, basis: sel.basis, ...(sel.ref ? { ref: sel.ref } : {}) };
+  const label = unitLabel(sel.unit, sel.ref, sel.basis);
+  // The connection wizard retains its existing raw onboarding figures above.
+  // Display-only figures below use the same selected basis as the usage panel.
+  if (activeTab === "connect") {
+    const [recent, machines, unmapped] = await Promise.all([
+      getMemberBreakdown(member.id, rangeForDays(7), sel),
+      getMyMachines(member.email, undefined, sel),
+      getUnmappedExternalIds(member.email, sel),
+    ]);
+    data.recentByTool = new Map();
+    for (const row of recent) {
+      const prev = data.recentByTool.get(row.tool) ?? { tokens: 0, requests: 0, unpricedTokens: 0 };
+      data.recentByTool.set(row.tool, {
+        tokens: prev.tokens + row.tokens,
+        requests: prev.requests + row.requests,
+        unpricedTokens: (prev.unpricedTokens ?? 0) + (row.unpricedTokens ?? 0),
+      });
+    }
+    data.machines = machines;
+    data.unmapped = unmapped;
+  }
 
   return (
     <div className="space-y-4">
       <PageHeader title="내 사용량">
         <div className="flex items-center gap-3">
           <Link
-            href="/me?tab=connect"
+            href={`/me?${new URLSearchParams({ ...keep, tab: "connect" })}`}
             className="rounded-full border border-black/10 px-3 py-1 text-xs text-[var(--text-secondary)] dark:border-white/10"
           >
             {connectedCount}/{totalCount} 연결됨
@@ -388,32 +487,42 @@ async function MemberView({
         {member.name} · <code>{member.email}</code>
       </p>
 
-      <GrowthCard memberId={member.id} />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <MeTabs active={activeTab} />
-        {activeTab === "usage" && <RangeTabs days={days} base="/me" />}
+        <MeTabs active={activeTab} keep={keep} />
       </div>
 
       {activeTab === "usage" ? (
         <>
-          <MemberUsagePanel memberId={member.id} days={days} numStyle={numStyle} />
+          <MemberUsagePanel
+            base="/me"
+            memberId={member.id}
+            days={days}
+            numStyle={numStyle}
+            unitParams={unitParams}
+          />
 
           {data.myLimits.length > 0 && (
-            <Card title="Claude 사용 한도" hint="계정·플랜별 최신 소진율 스냅샷">
-              <AccountLimits limits={data.myLimits} />
+            <Card title="플랜 사용 한도 (Claude·Codex)" hint="계정·플랜별 최신 소진율 스냅샷">
+              <AccountLimits
+                limits={data.myLimits}
+                machineIds={data.machines.map((m) => m.machineId)}
+              />
             </Card>
           )}
 
           <Scorecard memberId={member.id} />
+          <MyExperiments memberId={member.id} />
+          <GrowthCard memberId={member.id} />
         </>
       ) : (
         <>
+      <UnitPicker unit={sel.unit} refFamily={sel.ref} families={sel.families} basis={sel.basis} />
       <Card title="연결 체크리스트">
         <ChecklistRow done={checks.cursor} title="Cursor">
           {checks.cursor ? (
             <p className="text-[var(--text-muted)]">
-              {recentLine(data.recentByTool.get("cursor")) ??
+              {recentLine(data.recentByTool.get("cursor"), sel.unit, sel.basis) ??
                 "연결됨 — 관리자 API로 자동 수집됩니다."}
             </p>
           ) : (
@@ -435,7 +544,7 @@ async function MemberView({
               <p className="text-[var(--text-secondary)]">
                 내 컴퓨터에서 아래 한 줄을 실행하면 Claude Code 사용량 업로더가 설치됩니다.{" "}
                 <Link
-                  href="/me?step=claude_code"
+                  href={`/me?${new URLSearchParams({ ...keep, step: "claude_code" })}`}
                   className="text-[var(--series-1)] underline"
                 >
                   연결 마법사 열기
@@ -451,26 +560,32 @@ async function MemberView({
                 <div className="mb-1 text-xs font-medium text-[var(--text-primary)]">
                   수집 중인 기기
                 </div>
-                <table className="w-full max-w-md text-xs">
-                  <thead>
-                    <tr className="text-left text-[var(--text-muted)]">
-                      <th className="py-1 font-medium">기기</th>
-                      <th className="py-1 text-right font-medium">마지막 수집일</th>
-                      <th className="py-1 text-right font-medium">최근 14일 토큰</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.machines.map((m) => (
-                      <tr key={m.machineId} className="border-t border-black/5 dark:border-white/5">
-                        <td className="py-1.5 font-mono">{machineLabelMap.get(m.machineId) ?? m.machineId}</td>
-                        <td className="py-1.5 text-right tabular-nums">{m.lastDate}</td>
-                        <td className="py-1.5 text-right tabular-nums">
-                          {formatNumber(m.recentTokens)}
-                        </td>
+                <div className="overflow-x-auto">
+                  <table className="w-full max-w-2xl text-xs">
+                    <thead>
+                      <tr className="text-left text-[var(--text-muted)]">
+                        <th className="py-1 font-medium">이름</th>
+                        <th className="py-1 text-right font-medium">마지막 업로드</th>
+                        <th className="py-1 text-right font-medium">마지막 수집일</th>
+                        <th className="py-1 text-right font-medium">최근 14일 {label}</th>
+                        <th className="py-1 pl-3 font-medium">상태</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {data.machines.map((m) => (
+                        <MachineRows
+                          key={m.machineId}
+                          machine={m}
+                          unit={sel.unit}
+                          name={m.label ?? machineLabelMap.get(m.machineId) ?? m.machineId}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+                  여러 기기에서 본 세션은 기기마다 표시되며 합계는 한 번만 셉니다
+                </p>
               </div>
             )}
           </div>
@@ -486,7 +601,7 @@ async function MemberView({
               Claude Code를 설치하면 <code>~/.codex</code>의 Codex CLI 사용량도 자동으로 함께
               수집돼요. 별도 설치가 필요 없습니다.{" "}
               <Link
-                href="/me?step=claude_code"
+                href={`/me?${new URLSearchParams({ ...keep, step: "claude_code" })}`}
                 className="text-[var(--series-1)] underline"
               >
                 연결 마법사 열기
@@ -505,7 +620,7 @@ async function MemberView({
               Claude Code를 설치하면 <code>~/.gemini</code>의 Gemini CLI 사용량도 자동으로 함께
               수집돼요. 별도 설치가 필요 없습니다.{" "}
               <Link
-                href="/me?step=claude_code"
+                href={`/me?${new URLSearchParams({ ...keep, step: "claude_code" })}`}
                 className="text-[var(--series-1)] underline"
               >
                 연결 마법사 열기
@@ -525,7 +640,28 @@ async function MemberView({
               grok-q/grok-web 래퍼로 Grok을 쓰면 <code>~/.local/share/grok-usage.jsonl</code>에
               사용량이 쌓이고, Claude Code 업로더가 자동으로 함께 수집해요.{" "}
               <Link
-                href="/me?step=claude_code"
+                href={`/me?${new URLSearchParams({ ...keep, step: "claude_code" })}`}
+                className="text-[var(--series-1)] underline"
+              >
+                연결 마법사 열기
+              </Link>
+            </p>
+          )}
+        </ChecklistRow>
+
+        <ChecklistRow done={checks.opencode} title="OpenCode">
+          {checks.opencode ? (
+            <p className="text-[var(--text-muted)]">
+              연결됨 — Claude Code 업로더가 <code>opencode.db</code> 세션을 함께 수집합니다.
+              opencode로 쓴 Copilot Pro+ 사용량도 여기에 잡혀요.
+            </p>
+          ) : (
+            <p className="text-[var(--text-secondary)]">
+              Claude Code 업로더를 설치하면 opencode의 <code>opencode.db</code> 사용량이 자동으로
+              함께 수집돼요. opencode로 쓴 Copilot Pro+ 사용량도 여기서 수집됩니다. 별도 설치가
+              필요 없습니다.{" "}
+              <Link
+                href={`/me?${new URLSearchParams({ ...keep, step: "claude_code" })}`}
                 className="text-[var(--series-1)] underline"
               >
                 연결 마법사 열기
@@ -542,11 +678,11 @@ async function MemberView({
           ) : (
             <div className="space-y-3">
               <p className="text-[var(--text-secondary)]">
-                Copilot 사용량 조회를 위해 GitHub 사용자명과 fine-grained PAT(권한{" "}
+                Copilot 개인 과금 보고서 조회를 위해 GitHub 사용자명과 fine-grained PAT(권한{" "}
                 <strong>Plan: read</strong>)를 등록하세요. PAT는 암호화되어 저장되며 다시
                 표시되지 않습니다.{" "}
                 <Link
-                  href="/me?step=copilot"
+                  href={`/me?${new URLSearchParams({ ...keep, step: "copilot" })}`}
                   className="text-[var(--series-1)] underline"
                 >
                   연결 마법사 열기
@@ -569,7 +705,7 @@ async function MemberView({
                 </Link>
                 으로 기록하거나{" "}
                 <Link
-                  href={`/me?step=${encodeURIComponent(c.tool)}`}
+                  href={`/me?${new URLSearchParams({ ...keep, step: c.tool })}`}
                   className="text-[var(--series-1)] underline"
                 >
                   연결 마법사
@@ -590,7 +726,7 @@ async function MemberView({
               <tr className="text-left text-xs text-[var(--text-muted)]">
                 <th className="pb-2 font-medium">도구</th>
                 <th className="pb-2 font-medium">외부 ID</th>
-                <th className="pb-2 text-right font-medium">토큰</th>
+                <th className="pb-2 text-right font-medium">{label}</th>
                 <th className="pb-2 text-right font-medium">요청</th>
                 <th className="pb-2 text-right font-medium">최근</th>
                 <th className="pb-2 text-right font-medium"> </th>
@@ -605,7 +741,8 @@ async function MemberView({
                   <td className="py-2">{toolLabel(r.tool)}</td>
                   <td className="py-2 font-mono text-xs">{r.externalId}</td>
                   <td className="py-2 text-right tabular-nums">
-                    {r.tokens ? formatNumber(r.tokens) : "—"}
+                    {formatUsage(r.tokens, sel.unit)}
+                    {(r.unpricedTokens ?? 0) > 0 && <div className="text-[11px] text-[var(--text-muted)]">{unpricedNote(formatNumber(r.unpricedTokens ?? 0))}</div>}
                   </td>
                   <td className="py-2 text-right tabular-nums">
                     {r.requests ? formatNumber(r.requests) : "—"}
@@ -641,9 +778,9 @@ async function MemberView({
 export default async function MePage({
   searchParams,
 }: {
-  searchParams: Promise<{ step?: string; tab?: string; days?: string }>;
+  searchParams: Promise<SelectionParams & { step?: string; tab?: string; days?: string }>;
 }) {
-  const [viewer, { step, tab, days }] = await Promise.all([
+  const [viewer, { step, tab, days, unit, ref, basis }] = await Promise.all([
     getViewer(),
     searchParams,
   ]);
@@ -651,7 +788,13 @@ export default async function MePage({
   return (
     <div>
       {viewer.status === "member" ? (
-        <MemberView member={viewer.member} step={step} tab={tab} days={parseDays(days)} />
+        <MemberView
+          member={viewer.member}
+          step={step}
+          tab={tab}
+          days={parseDays(days)}
+          unitParams={{ unit, ref, basis }}
+        />
       ) : (
         <>
           <PageHeader title="내 사용량" />

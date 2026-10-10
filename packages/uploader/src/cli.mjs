@@ -1,10 +1,15 @@
 #!/usr/bin/env node
-// token-forest-upload — push local Claude Code token usage to a token-forest server.
+// token-forest-upload — push local AI-tool token usage to a token-forest server.
 //
-// Scans ~/.claude/projects/**/*.jsonl, aggregates daily per-model token totals,
-// and POSTs them to {serverUrl}/api/ingest. Idempotent: the server upserts by
-// (date, tool, model, member), so re-running never inflates totals.
+// Scans each tool's local logs (Claude Code, Codex, Gemini, Grok, opencode), turns them
+// into session-grained rows (collection v2) and POSTs them to
+// {serverUrl}/api/ingest. Idempotent: the server max-merges session rows per
+// (tool, sessionId, hour, model), so re-sending an overlap never inflates
+// totals. The scan window comes from a change cursor (lib/cursor.mjs): all
+// local logs on the first run and at least weekly, otherwise from one KST day
+// before the last successful upload. Old servers get the v1 daily rows.
 
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs, resolveConfig, configPath } from "./config.mjs";
@@ -13,10 +18,34 @@ import * as claudeLimits from "./parsers/claude-limits.mjs";
 import * as codex from "./parsers/codex.mjs";
 import * as gemini from "./parsers/gemini.mjs";
 import * as grok from "./parsers/grok.mjs";
-import { sendRows, sendLimits } from "./send.mjs";
+import * as opencode from "./parsers/opencode.mjs";
+import { sendV2, sendLimits } from "./send.mjs";
 import { buildAndSendDigest } from "./digest.mjs";
+import { readCursor, writeCursor, decideWindow, applySinceFloor } from "./lib/cursor.mjs";
+import { acquireRunLock } from "./lib/run-lock.mjs";
+import { loadAttribution, saveAttribution } from "./lib/claude-attr.mjs";
+import { stateDir } from "./lib/state-dir.mjs";
+import { dropInvalidSessions } from "./lib/sessions.mjs";
 
-const HELP = `token-forest-upload — upload local Claude Code usage to token-forest
+// Usage parsers, in upload order. Each exports `tool` and
+// `aggregate({ sinceDate, machineId, attribution })` →
+// { rows, hourlyRows, sessions, health, stats }. Adding a tool = one line here.
+// (`attribution` is the sticky Claude index; other parsers ignore it. opencode
+// reads its local SQLite DB, never cross-device replicated, so it needs none.)
+const PARSERS = [claudeCode, codex, gemini, grok, opencode];
+
+// Sent as device.uploaderVersion so the server can tell uploader generations
+// apart. The tarball ships package.json next to src/.
+function uploaderVersion() {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    return typeof pkg.version === "string" && pkg.version ? pkg.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+const HELP = `token-forest-upload — upload local AI tool usage (Claude Code, Codex, Gemini, Grok, OpenCode) to token-forest
 
 Usage:
   token-forest-upload [options]
@@ -24,30 +53,41 @@ Usage:
 Options:
   --server <url>     token-forest server base URL (e.g. https://meter.example.com)
   --token <token>    per-member ingest token (get it from your token-forest admin)
-  --since <date>     only scan usage on/after this UTC date (YYYY-MM-DD).
-                     Default: 30 days ago.
-  --machine-id <id>  label this machine's usage (default: this host's short
-                     name). Uploads from different machines add up instead of
-                     overwriting, so give each machine a distinct id.
+  --since <date>     only scan usage on/after this KST date (YYYY-MM-DD). Ignores
+                     (and keeps) the change cursor. Default: the cursor decides —
+                     everything on the first run and at least weekly, otherwise
+                     from the day before the last successful upload.
+  --full             send every local log now (a full resend; stamps the cursor)
+  --device-label <name>
+                     your own name for this machine (max 32 chars, e.g. "맥북"),
+                     shown only on your /me. config.json "deviceLabel" works too.
+                     Never filled in automatically.
+  --machine-id <id>  override this machine's pseudonymous id (default: a random
+                     device id persisted in the state dir).
   --claude-dir <dir> 추가 Claude config 디렉터리(여러 번 지정 가능). 여러
                      계정을 CLAUDE_CONFIG_DIR 프로필로 쓸 때 각 계정의 한도를
                      함께 추적합니다. env: TOKEN_FOREST_CLAUDE_DIRS(쉼표/콜론 구분)
   --limits-only      사용량 스캔 없이 한도 스냅샷만 빠르게 갱신
-  --no-limits        skip the Claude plan rate-limit snapshot (see below)
+  --no-limits        skip the Claude/Codex plan rate-limit snapshot (see below)
   --no-digest        skip the daily digest draft (see README); config.json의
                      "digest": false 로도 끌 수 있습니다
-  --dry-run          print the aggregated rows and send nothing
+  --dry-run          print per-tool session counts, token sums and parser
+                     health; send nothing, leave the cursor alone
   -h, --help         show this help
 
 By default the run also snapshots your Claude plan's rate-limit windows (5-hour,
-7-day, ...) via an unofficial usage API and uploads them as account-level
-"claude_limits" rows. Any failure there only warns; it never fails the upload.
+7-day, ...) via an unofficial usage API, plus the Codex windows recorded in your
+newest local Codex session logs, and uploads them as account-level limits rows.
+Any failure there only warns; it never fails the upload.
 
 Configuration (highest precedence first):
-  1. CLI flags:  --server, --token, --machine-id
+  1. CLI flags:  --server, --token, --machine-id, --device-label
   2. Env vars:   TOKEN_FOREST_URL, TOKEN_FOREST_TOKEN, TOKEN_FOREST_MACHINE_ID
   3. Config file: ~/.config/token-forest/config.json
-                  { "serverUrl": "...", "token": "..." }
+                  { "serverUrl": "...", "token": "...", "deviceLabel": "..." }
+
+State (device-id, cursor.json, claude-attr.json) lives in ~/.token-forest;
+TOKEN_FOREST_STATE_DIR overrides the folder.
 
 Examples:
   token-forest-upload --dry-run
@@ -55,88 +95,91 @@ Examples:
   token-forest-upload --since 2026-07-01
 `;
 
+const V1_FALLBACK_DAYS = 30;
+
+// KST date (YYYY-MM-DD) n days before `now`.
+function kstDaysAgo(now, n) {
+  return new Date(now.getTime() + 9 * 3600_000 - n * 86400_000).toISOString().slice(0, 10);
+}
+
 function fmtInt(n) {
   return Number(n).toLocaleString("en-US");
 }
 
-// Render aggregated rows as a fixed-width table for --dry-run.
-function printTable(rows, machineId) {
-  console.log(`machineId: ${machineId || "(none)"}  (uploads from other machines add up)`);
-  if (rows.length === 0) {
-    console.log("(no usage found for the selected range)");
-    return;
+// --dry-run summary: per tool, distinct sessions, session rows and token sums,
+// then each parser's health reading.
+function printSessionSummary(sessions, health, { mode, sinceDate, machineId, deviceLabel }) {
+  console.log(`machineId: ${machineId || "(none)"}  label: ${deviceLabel ?? "(none)"}`);
+  console.log(`window: ${mode}${sinceDate ? ` since ${sinceDate} (KST)` : " (all local logs)"}`);
+  const byTool = new Map();
+  for (const s of sessions) {
+    let t = byTool.get(s.tool);
+    if (!t) {
+      t = { ids: new Set(), rows: 0, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, reqs: 0 };
+      byTool.set(s.tool, t);
+    }
+    t.ids.add(s.sessionId);
+    t.rows++;
+    t.input += s.inputTokens;
+    t.output += s.outputTokens;
+    t.cacheRead += s.cacheReadTokens;
+    t.cacheCreate += s.cacheCreationTokens;
+    t.reqs += s.requests;
   }
-  const headers = [
-    "date",
-    "tool",
-    "model",
-    "input",
-    "output",
-    "cacheRead",
-    "cacheCreate",
-    "reqs",
-    "sess",
-  ];
-  const body = rows.map((r) => [
-    r.date,
-    r.tool,
-    r.model,
-    fmtInt(r.inputTokens),
-    fmtInt(r.outputTokens),
-    fmtInt(r.cacheReadTokens),
-    fmtInt(r.cacheCreationTokens),
-    fmtInt(r.requests),
-    fmtInt(r.sessions),
-  ]);
-  const widths = headers.map((h, i) =>
-    Math.max(h.length, ...body.map((row) => row[i].length)),
-  );
-  const line = (cells) =>
-    cells.map((c, i) => c.padEnd(widths[i])).join("  ").trimEnd();
-  console.log(line(headers));
-  console.log(widths.map((w) => "-".repeat(w)).join("  "));
-  for (const row of body) console.log(line(row));
-
-  const totals = rows.reduce(
-    (t, r) => {
-      t.input += r.inputTokens;
-      t.output += r.outputTokens;
-      t.cacheRead += r.cacheReadTokens;
-      t.cacheCreate += r.cacheCreationTokens;
-      t.reqs += r.requests;
-      return t;
-    },
-    { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, reqs: 0 },
-  );
-  console.log(widths.map((w) => "-".repeat(w)).join("  "));
-  console.log(
-    line([
-      "TOTAL",
-      "",
-      `${rows.length} rows`,
-      fmtInt(totals.input),
-      fmtInt(totals.output),
-      fmtInt(totals.cacheRead),
-      fmtInt(totals.cacheCreate),
-      fmtInt(totals.reqs),
-      "",
-    ]),
-  );
+  if (byTool.size === 0) console.log("(no usage found for the selected window — a heartbeat would be sent)");
+  const width = Math.max(4, ...[...byTool.keys()].map((k) => k.length));
+  for (const [tool, t] of byTool) {
+    console.log(
+      `  ${tool.padEnd(width)}  ${fmtInt(t.ids.size)} session(s), ${fmtInt(t.rows)} row(s)  ` +
+        `input ${fmtInt(t.input)}  output ${fmtInt(t.output)}  cacheRead ${fmtInt(t.cacheRead)}  ` +
+        `cacheCreate ${fmtInt(t.cacheCreate)}  reqs ${fmtInt(t.reqs)}`,
+    );
+  }
+  console.log("parser health:");
+  for (const h of health) {
+    const err = h.error ? `  error=${h.error}` : "";
+    console.log(
+      `  ${h.parser.padEnd(width)}  filesScanned=${h.filesScanned} linesUnrecognized=${h.linesUnrecognized} ` +
+        `sessionsEmitted=${h.sessionsEmitted}${err}`,
+    );
+  }
 }
 
-// Snapshot Claude plan rate-limit windows and either print them (dry-run) or
-// upload them. Any failure — missing credential, changed/404 endpoint, network
-// error — is downgraded to a single warn line so it never fails the run.
-async function runLimits(config, { dryRun }) {
+// Collect every plan rate-limit snapshot this machine can see: Claude (per
+// config dir, via the unofficial usage API) and Codex (the newest rate_limits
+// in local rollouts). Each source fails independently and only warns.
+async function collectLimitSnapshots(config) {
+  const snapshots = [];
   try {
-    const { snapshots, warnings } = await claudeLimits.snapshotAll({
+    const { snapshots: claude, warnings } = await claudeLimits.snapshotAll({
       configDirs: config.claudeDirs,
     });
     for (const w of warnings) console.error(`warn: limits(${w})`);
+    snapshots.push(...claude);
+  } catch (err) {
+    console.error(`warn: skipped Claude plan limits snapshot (${err.message}).`);
+  }
+  try {
+    // organization "device:<sha1 tag of the pseudonymous device id>" keeps
+    // this device's Codex plan apart from the member's other devices (R23).
+    snapshots.push(...(await codex.snapshotLimits({ machineId: config.machineId })));
+  } catch (err) {
+    console.error(`warn: skipped Codex limits snapshot (${err.code ?? "read error"}).`);
+  }
+  return snapshots;
+}
+
+// Snapshot plan rate-limit windows (Claude + Codex) and either print them
+// (dry-run) or upload them to /api/limits. Any failure — missing credential,
+// changed/404 endpoint, network error — is downgraded to a warn line so it
+// never fails the run.
+async function runLimits(config, { dryRun }) {
+  try {
+    const snapshots = await collectLimitSnapshots(config);
     if (dryRun) {
       const accounts = [...new Set(snapshots.map((s) => s.accountEmail))].join(", ");
       console.log(
-        `\nClaude plan limits for ${accounts || "(unknown account)"} (${snapshots.length} window(s), sending nothing):`,
+        `\nPlan limits for ${accounts || "(unknown account)"} (${snapshots.length} window(s), sending nothing):`,
       );
       for (const s of snapshots) {
         const resetsAt = s.resetsAt ? `  resets ${s.resetsAt}` : "";
@@ -146,11 +189,15 @@ async function runLimits(config, { dryRun }) {
       }
       return;
     }
-    if (!config.serverUrl || !config.token) {
-      console.error("warn: skipped Claude plan limits snapshot (no server URL/token).");
+    if (snapshots.length === 0) {
+      console.error("No plan limits snapshot to upload.");
       return;
     }
-    console.error(`Uploading ${snapshots.length} Claude limits snapshot(s) ...`);
+    if (!config.serverUrl || !config.token) {
+      console.error("warn: skipped plan limits snapshot (no server URL/token).");
+      return;
+    }
+    console.error(`Uploading ${snapshots.length} limits snapshot(s) ...`);
     const { upserted } = await sendLimits({
       serverUrl: config.serverUrl,
       token: config.token,
@@ -160,7 +207,7 @@ async function runLimits(config, { dryRun }) {
       `Done. Uploaded ${snapshots.length} limits snapshot(s); server upserted ${upserted}.`,
     );
   } catch (err) {
-    console.error(`warn: skipped Claude plan limits snapshot (${err.message}).`);
+    console.error(`warn: skipped plan limits snapshot (${err.message}).`);
   }
 }
 
@@ -179,7 +226,13 @@ async function main() {
     return;
   }
 
-  const config = await resolveConfig(flags);
+  let config;
+  try {
+    config = await resolveConfig(flags);
+  } catch (err) {
+    console.error(`error: ${err.message}`);
+    process.exit(2);
+  }
 
   if (config.limitsOnly) {
     console.error("--limits-only: 사용량 스캔 없이 한도 스냅샷만 갱신합니다.");
@@ -187,108 +240,134 @@ async function main() {
     return;
   }
 
-  console.error(`Machine: ${config.machineId || "(none)"}`);
-  console.error(`Scanning ~/.claude/projects for usage since ${config.since} (UTC)...`);
-  const {
-    rows: claudeRows,
-    hourlyRows: claudeHourly,
-    stats,
-  } = await claudeCode.aggregate({
-    sinceDate: config.since,
+  // One state-writing run at a time per machine (Ruling R21): the hourly
+  // schedule, the SessionEnd hook and manual runs can overlap. A dry-run only
+  // reads state, so it never takes (or waits for) the lock.
+  if (!flags.dryRun) {
+    let lock = null;
+    try {
+      lock = acquireRunLock();
+    } catch (err) {
+      console.error(`warn: could not create run lock (${err.code ?? "fs error"}); continuing without it.`);
+    }
+    if (lock && !lock.acquired) {
+      console.log("Another token-forest upload is already running on this machine — skipping this run.");
+      return;
+    }
+    if (lock) {
+      process.on("exit", lock.release);
+      // Ctrl-C / kill: release the lock, exit with the conventional code.
+      process.once("SIGINT", () => {
+        lock.release();
+        process.exit(130);
+      });
+      process.once("SIGTERM", () => {
+        lock.release();
+        process.exit(143);
+      });
+    }
+  }
+
+  // Scan window. Explicit --since wins (cursor ignored and kept); --full forces
+  // a full resend; otherwise the cursor decides. TOKEN_FOREST_SINCE only raises
+  // the start of a cursor window. The run's start time becomes the next
+  // cursor, so lines written during the scan are re-read next run.
+  const runStartedAt = new Date();
+  const cursor = readCursor();
+  const window = config.since
+    ? { mode: "since", sinceDate: config.since }
+    : applySinceFloor(
+        config.full ? { mode: "full", sinceDate: null } : decideWindow(cursor, runStartedAt),
+        config.sinceFloor,
+      );
+
+  console.error(`Machine: ${config.machineId || "(none)"}  (state: ${stateDir()})`);
+  console.error(
+    window.sinceDate
+      ? `Scanning local logs (${window.mode}) for usage since ${window.sinceDate} (KST)...`
+      : `Scanning all local logs (${window.mode})...`,
+  );
+
+  // Every parser is best-effort: a failure warns locally and reports a fixed
+  // health code (never the raw message, which may carry paths) so the rest of
+  // the run still uploads.
+  const attribution = loadAttribution();
+  let attributionSeen = null; // key16s met by the claude parser (R20 prune set)
+  let attributionScan = null; // that scan's { files, dirErrors }
+  const rows = [];
+  const hourlyRows = [];
+  const sessions = [];
+  const health = [];
+  for (const parser of PARSERS) {
+    try {
+      // Rows the server schema would reject are dropped (and counted as
+      // unrecognized) so one bad row can't 400 the whole upload (F4).
+      const r = dropInvalidSessions(await parser.aggregate({
+        sinceDate: window.sinceDate ?? undefined,
+        machineId: config.machineId,
+        attribution,
+      }));
+      rows.push(...r.rows);
+      hourlyRows.push(...r.hourlyRows);
+      if (r.attributionSeen) {
+        attributionSeen = r.attributionSeen;
+        attributionScan = { files: r.stats?.files ?? 0, dirErrors: r.stats?.dirErrors ?? 0 };
+      }
+      if (r.stats?.skippedPinnedAbsent > 0) {
+        console.error(
+          `${parser.tool}: ${fmtInt(r.stats.skippedPinnedAbsent)} message(s) pinned to a session whose ` +
+            "file is gone — already uploaded under that session, not re-sent.",
+        );
+      }
+      // Session rows carry this device's pseudonymous id (server machineIds).
+      for (const s of r.sessions ?? []) sessions.push({ ...s, machineId: config.machineId });
+      if (r.health) health.push(r.health);
+      if (r.health?.filesScanned > 0 || (r.sessions?.length ?? 0) > 0) {
+        console.error(
+          `${parser.tool}: scanned ${fmtInt(r.health?.filesScanned ?? 0)} file(s), ` +
+            `${fmtInt(r.sessions?.length ?? 0)} session row(s), ` +
+            `${fmtInt(r.health?.linesUnrecognized ?? 0)} unrecognized line(s).`,
+        );
+      }
+    } catch (err) {
+      console.error(`warn: skipped ${parser.tool} scan (${err.message}).`);
+      health.push({ parser: parser.tool, filesScanned: 0, linesUnrecognized: 0, sessionsEmitted: 0, error: "parser_failed" });
+    }
+  }
+  console.error(
+    `Collected ${fmtInt(sessions.length)} session row(s) ` +
+      `(v1 fallback: ${rows.length} daily / ${hourlyRows.length} hourly row(s)).`,
+  );
+
+  const device = {
     machineId: config.machineId,
-  });
-  console.error(
-    `Scanned ${stats.files} files, ${fmtInt(stats.linesRead)} lines: ` +
-      `${fmtInt(stats.counted)} counted, ${fmtInt(stats.duplicates)} duplicate, ` +
-      `${fmtInt(stats.synthetic)} synthetic, ${fmtInt(stats.malformed)} malformed lines skipped.`,
-  );
-
-  // Codex CLI usage (~/.codex/sessions). Best-effort like the limits/digest
-  // blocks: any failure warns and degrades to empty so it never blocks the
-  // claude_code upload. (Missing dir is already handled inside the parser.)
-  let codexRows = [];
-  let codexHourly = [];
-  try {
-    const codexResult = await codex.aggregate({
-      sinceDate: config.since,
-      machineId: config.machineId,
-    });
-    codexRows = codexResult.rows;
-    codexHourly = codexResult.hourlyRows;
-    if (codexResult.stats.files > 0) {
-      console.error(
-        `Codex: scanned ${codexResult.stats.files} rollout file(s), ` +
-          `${fmtInt(codexResult.stats.events)} usage event(s).`,
-      );
-    }
-  } catch (err) {
-    console.error(`warn: skipped Codex scan (${err.message}).`);
-  }
-
-  // Gemini CLI usage (~/.gemini/tmp/**/chats). Best-effort, same as Codex.
-  let geminiRows = [];
-  let geminiHourly = [];
-  try {
-    const geminiResult = await gemini.aggregate({
-      sinceDate: config.since,
-      machineId: config.machineId,
-    });
-    geminiRows = geminiResult.rows;
-    geminiHourly = geminiResult.hourlyRows;
-    if (geminiResult.stats.files > 0) {
-      console.error(
-        `Gemini: scanned ${geminiResult.stats.files} session file(s), ` +
-          `${fmtInt(geminiResult.stats.events)} usage event(s).`,
-      );
-    }
-  } catch (err) {
-    console.error(`warn: skipped Gemini scan (${err.message}).`);
-  }
-
-  // Grok usage (~/.local/share/grok-usage.jsonl, written by grok-q/grok-web
-  // API wrappers). Best-effort, same as Codex/Gemini.
-  let grokRows = [];
-  let grokHourly = [];
-  try {
-    const grokResult = await grok.aggregate({
-      sinceDate: config.since,
-      machineId: config.machineId,
-    });
-    grokRows = grokResult.rows;
-    grokHourly = grokResult.hourlyRows;
-    if (grokResult.stats.linesRead > 0) {
-      console.error(
-        `Grok: read ${fmtInt(grokResult.stats.linesRead)} usage line(s), ` +
-          `${fmtInt(grokResult.stats.events)} call(s).`,
-      );
-    }
-  } catch (err) {
-    console.error(`warn: skipped Grok scan (${err.message}).`);
-  }
-
-  const rows = [...claudeRows, ...codexRows, ...geminiRows, ...grokRows];
-  const hourlyRows = [...claudeHourly, ...codexHourly, ...geminiHourly, ...grokHourly];
-  console.error(
-    `Aggregated into ${rows.length} daily row(s) and ${hourlyRows.length} hourly row(s).`,
-  );
+    ...(config.deviceLabel ? { label: config.deviceLabel } : {}),
+    uploaderVersion: uploaderVersion(),
+  };
 
   if (flags.dryRun) {
-    console.error("--dry-run: printing rows, sending nothing.\n");
-    printTable(rows, config.machineId);
-    console.log(`\n${hourlyRows.length} hourly row(s) would be sent (usage_hourly mirror).`);
+    console.error("--dry-run: printing a summary, sending nothing, cursor untouched.\n");
+    printSessionSummary(sessions, health, {
+      mode: window.mode,
+      sinceDate: window.sinceDate,
+      machineId: config.machineId,
+      deviceLabel: config.deviceLabel,
+    });
+    console.log(`\n${rows.length} daily / ${hourlyRows.length} hourly row(s) would be sent only to an old (v1) server.`);
     if (config.limits) await runLimits(config, { dryRun: true });
     if (config.digest) console.log("digest: skipped (--dry-run — 초안을 생성하지 않습니다)");
     return;
   }
 
-  if (rows.length === 0) {
-    console.log(
-      "Nothing to upload — 이 기기에는 Claude Code 사용 기록이 아직 없습니다.\n" +
-        "이 기기에서 Claude Code를 사용하면 자동으로 업로드되기 시작하고, 그때\n" +
-        "대시보드 /me 의 '수집 중인 기기'에 이 기기가 나타납니다. (다른 기기에서의\n" +
-        "사용량은 그 기기의 업로더가 담당합니다 — 중복 집계되지 않습니다.)",
-    );
-  } else if (!config.serverUrl || !config.token) {
+  if (!config.serverUrl || !config.token) {
+    if (sessions.length === 0 && rows.length === 0) {
+      console.log(
+        "Nothing to upload — 이 기기에는 사용 기록이 아직 없습니다.\n" +
+          "이 기기에서 AI 도구를 사용하면 자동으로 업로드되기 시작하고, 그때\n" +
+          "대시보드 /me 의 '수집 중인 기기'에 이 기기가 나타납니다.",
+      );
+      return;
+    }
     console.error(
       "\nerror: missing server URL and/or ingest token.\n" +
         "Provide them via --server/--token, TOKEN_FOREST_URL/TOKEN_FOREST_TOKEN,\n" +
@@ -296,32 +375,105 @@ async function main() {
         "Run with --dry-run to preview without credentials.",
     );
     process.exit(2);
-  } else {
-    console.error(`Uploading ${rows.length} row(s) to ${config.serverUrl}/api/ingest ...`);
-    try {
-      const { batches, upserted, skipped, hourlyUpserted } = await sendRows({
-        serverUrl: config.serverUrl,
-        token: config.token,
-        rows,
-        hourly: hourlyRows,
-      });
-      const skippedNote =
-        skipped > 0
-          ? ` (${skipped} skipped — already covered by a higher-priority source, e.g. a central poller)`
-          : "";
-      const hourlyNote =
-        hourlyRows.length > 0
-          ? ` Sent ${hourlyRows.length} hourly row(s); server upserted ${hourlyUpserted}.`
-          : "";
-      console.log(
-        `Done. Uploaded ${rows.length} row(s) in ${batches} batch(es); server upserted ${upserted}${skippedNote}.${hourlyNote}`,
+  }
+
+  // Pin this run's Claude attributions before sending (Ruling R6: the first
+  // assignment wins forever, even if this upload fails part-way). Merged with
+  // the on-disk index (R21). Only a truly full scan (no since bound at all)
+  // prunes pins it did not see (R20); a partial scan can't know. A walk that
+  // hit unreadable dirs, or found no files at all, is not trusted to prune.
+  try {
+    let prune = window.mode === "full" && !window.sinceDate && attributionSeen !== null;
+    if (prune && (attributionScan.files === 0 || attributionScan.dirErrors > 0)) {
+      console.error(
+        `warn: claude scan incomplete (${attributionScan.files} file(s), ${attributionScan.dirErrors} unreadable dir(s)); ` +
+          "keeping all attribution pins this run.",
       );
+      prune = false;
+    }
+    saveAttribution(attribution, prune ? { seen: attributionSeen } : {});
+  } catch (err) {
+    console.error(`warn: could not save claude-attr index (${err.code ?? "write error"}).`);
+  }
+
+  // Cursor after a success: explicit --since leaves it alone (its window may
+  // not cover what the cursor still owes); full/incremental advance it.
+  // keepFull: the server took nothing of this full run (v1 server, nothing in
+  // the v1 window), so the full resend is still owed.
+  const commitCursor = ({ keepFull = false } = {}) => {
+    if (window.mode === "since") return;
+    try {
+      writeCursor({
+        lastSuccessAt: runStartedAt.toISOString(),
+        lastFullAt: window.mode === "full" && !keepFull ? runStartedAt.toISOString() : cursor.lastFullAt,
+        // keepFull: keep the old parserVersion too, so a full resend forced by
+        // a parser bump (R19) is still owed after a v1-server run.
+        ...(keepFull ? { parserVersion: cursor.parserVersion } : {}),
+      });
+    } catch (err) {
+      console.error(`warn: could not save cursor (${err.code ?? "write error"}); the next run re-sends this window.`);
+    }
+  };
+
+  // Old (v1) servers overwrite daily totals; never push more history there
+  // than the pre-v2 uploader did (30 days) in a cursor-driven full run.
+  const fallbackFloor = window.mode === "full" ? kstDaysAgo(runStartedAt, V1_FALLBACK_DAYS) : null;
+  const fallbackRows = fallbackFloor ? rows.filter((r) => r.date >= fallbackFloor) : rows;
+  const fallbackHourly = fallbackFloor
+    ? hourlyRows.filter((h) => h.hour.slice(0, 10) >= fallbackFloor)
+    : hourlyRows;
+
+  if (sessions.length === 0) {
+    // Nothing new: heartbeat so /me keeps this device fresh (Ruling R12).
+    try {
+      const r = await sendV2({ serverUrl: config.serverUrl, token: config.token, sessions, health, device, fallbackRows, fallbackHourly });
+      if (r.mode === "v1-fallback") {
+        console.log(`Done (v1-fallback). Uploaded ${fallbackRows.length} daily row(s); server upserted ${r.upserted}.`);
+      } else if (r.mode === "heartbeat") {
+        console.log("Nothing new to upload — sent a heartbeat (v2).");
+      } else {
+        console.log("Nothing new to upload.");
+      }
+      commitCursor();
+    } catch (err) {
+      console.error(`warn: heartbeat not delivered (${err.message}).`);
+    }
+  } else {
+    console.error(`Uploading ${fmtInt(sessions.length)} session row(s) to ${config.serverUrl}/api/ingest ...`);
+    try {
+      const r = await sendV2({ serverUrl: config.serverUrl, token: config.token, sessions, health, device, fallbackRows, fallbackHourly });
+      if (r.mode === "v1-empty") {
+        console.log(
+          `Server is v1 (does not accept sessions yet); nothing to send in the v1 window ` +
+            `(last ${V1_FALLBACK_DAYS} days). Full resend still pending.`,
+        );
+        commitCursor({ keepFull: true });
+        return finish(config);
+      }
+      if (r.mode === "v1-fallback") {
+        console.log(
+          `Done (v1-fallback — server does not accept sessions yet). Uploaded ${fallbackRows.length} daily row(s); ` +
+            `server upserted ${r.upserted}${r.skipped ? ` (${r.skipped} skipped)` : ""}; ` +
+            `${fallbackHourly.length} hourly row(s), upserted ${r.hourlyUpserted}.`,
+        );
+      } else {
+        console.log(
+          `Done (v2). Uploaded ${fmtInt(sessions.length)} session row(s) in ${r.requests} request(s); ` +
+            `server upserted ${fmtInt(r.sessionsUpserted)}.`,
+        );
+      }
+      commitCursor();
     } catch (err) {
       console.error(`\nupload failed: ${err.message}`);
       process.exit(1);
     }
   }
 
+  await finish(config);
+}
+
+// After the usage upload: limits snapshot, then the (retired) digest.
+async function finish(config) {
   if (config.limits) await runLimits(config, { dryRun: false });
 
   // Daily digest draft (see README "일일 다이제스트"): builds yesterday's
@@ -350,7 +502,11 @@ async function main() {
   }
 }
 
-main().catch((err) => {
+const argv = process.argv.slice(2);
+const run = argv.some((arg) => ["--reliable", "--reliable-manifest", "--reliable-reconcile"].includes(arg))
+  ? import("./reliable/cli.mjs").then(({ runReliable }) => runReliable(argv))
+  : main();
+run.catch((err) => {
   console.error(err?.stack ?? String(err));
   process.exit(1);
 });

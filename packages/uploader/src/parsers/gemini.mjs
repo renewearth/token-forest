@@ -9,7 +9,7 @@
 // turn contributes only its own delta and a reset (total drops) rebaselines.
 // `input` INCLUDES cached, so non-cache input = input − cached. `thoughts` are
 // generated reasoning tokens → folded into output. Gemini exposes no cache-write
-// metric (cacheCreation = 0), same as Codex.
+// metric (cacheCreation = null), same as Codex.
 //
 // Sibling of codex.mjs / claude-code.mjs — same { tool, aggregate } contract.
 
@@ -19,11 +19,12 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { kstDate, kstHour } from "../lib/kst.mjs";
+import { addMetric, bucketEvents, emptyMetrics, fileStem, makeHealth } from "../lib/sessions.mjs";
 
 export const tool = "gemini";
 
 function num(v) {
-  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+  return Number.isSafeInteger(v) && v >= 0 ? v : null;
 }
 
 // Fold ONE session file's parsed JSON lines into a flat list of delta events.
@@ -58,32 +59,34 @@ export function foldSession(lines) {
 
     // Per-field reset detection, independent per field (mirrors codex.mjs): a
     // field dropping below its own baseline rebaselines only that field to 0.
-    const baseInput = !started || totInput < prev.input ? 0 : prev.input;
-    const baseCached = !started || totCached < prev.cached ? 0 : prev.cached;
-    const baseOutput = !started || totOutput < prev.output ? 0 : prev.output;
-    const baseThoughts = !started || totThoughts < prev.thoughts ? 0 : prev.thoughts;
+    const baseInput = !started || (totInput !== null && totInput < prev.input) ? 0 : prev.input;
+    const baseCached = !started || (totCached !== null && totCached < prev.cached) ? 0 : prev.cached;
+    const baseOutput = !started || (totOutput !== null && totOutput < prev.output) ? 0 : prev.output;
+    const baseThoughts = !started || (totThoughts !== null && totThoughts < prev.thoughts) ? 0 : prev.thoughts;
     started = true;
 
-    const dInput = totInput - baseInput;
-    const dCached = totCached - baseCached;
-    const dOutput = totOutput - baseOutput;
-    const dThoughts = totThoughts - baseThoughts;
-    prev.input = totInput;
-    prev.cached = totCached;
-    prev.output = totOutput;
-    prev.thoughts = totThoughts;
+    const dInput = totInput === null ? null : totInput - baseInput;
+    const dCached = totCached === null ? null : totCached - baseCached;
+    const dOutput = totOutput === null ? null : totOutput - baseOutput;
+    const dThoughts = totThoughts === null ? null : totThoughts - baseThoughts;
+    if (totInput !== null) prev.input = totInput;
+    if (totCached !== null) prev.cached = totCached;
+    if (totOutput !== null) prev.output = totOutput;
+    if (totThoughts !== null) prev.thoughts = totThoughts;
 
-    const outputTokens = dOutput + dThoughts; // reasoning tokens are generated
-    if (dInput === 0 && dCached === 0 && outputTokens === 0) continue;
+    const outputTokens = dOutput === null && dThoughts === null ? null : (dOutput ?? 0) + (dThoughts ?? 0); // reasoning tokens are generated
+    if ([dInput, dCached, outputTokens].every((v) => v === 0 || v === null)) continue;
 
     events.push({
       date: kstDate(ts),
       hour: kstHour(ts),
+      ts: new Date(ts).toISOString(),
       model,
-      inputTokens: Math.max(0, dInput - dCached), // input includes cached
+      inputTokens: dInput === null || dCached === null ? null : Math.max(0, dInput - dCached), // input includes cached
       cacheReadTokens: dCached,
       outputTokens,
-      cacheCreationTokens: 0,
+      cacheCreationTokens: null,
+      fieldEvidence: { cacheCreationTokens: "unsupported", outputTokens: dOutput === null || dThoughts === null ? "unknown" : "known" },
     });
   }
   return events;
@@ -104,28 +107,20 @@ export function assembleRows(fileEvents, machineId = "") {
       const dk = `${e.date}|${e.model}`;
       let d = days.get(dk);
       if (!d) {
-        d = { date: e.date, model: e.model, inputTokens: 0, outputTokens: 0,
-              cacheReadTokens: 0, cacheCreationTokens: 0, requests: 0 };
+        d = { date: e.date, model: e.model, ...emptyMetrics() };
         days.set(dk, d);
       }
-      d.inputTokens += e.inputTokens;
-      d.outputTokens += e.outputTokens;
-      d.cacheReadTokens += e.cacheReadTokens;
-      d.cacheCreationTokens += e.cacheCreationTokens;
-      d.requests += 1;
+      for (const f of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"]) addMetric(d, e, f);
+      addMetric(d, { requests: 1 }, "requests");
 
       const hk = `${e.hour}|${e.model}`;
       let h = hours.get(hk);
       if (!h) {
-        h = { hour: e.hour, model: e.model, inputTokens: 0, outputTokens: 0,
-              cacheReadTokens: 0, cacheCreationTokens: 0, requests: 0 };
+        h = { hour: e.hour, model: e.model, ...emptyMetrics() };
         hours.set(hk, h);
       }
-      h.inputTokens += e.inputTokens;
-      h.outputTokens += e.outputTokens;
-      h.cacheReadTokens += e.cacheReadTokens;
-      h.cacheCreationTokens += e.cacheCreationTokens;
-      h.requests += 1;
+      for (const f of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"]) addMetric(h, e, f);
+      addMetric(h, { requests: 1 }, "requests");
     }
     for (const date of daysTouched) {
       sessionsByDay.set(date, (sessionsByDay.get(date) ?? 0) + 1);
@@ -145,6 +140,8 @@ export function assembleRows(fileEvents, machineId = "") {
       cacheReadTokens: acc.cacheReadTokens,
       cacheCreationTokens: acc.cacheCreationTokens,
       requests: acc.requests,
+      fieldEvidence: { ...acc.fieldEvidence, sessions: "known" },
+      dateBasis: "KST",
       sessions:
         i === 0 || sorted[i - 1].date !== acc.date
           ? sessionsByDay.get(acc.date) ?? 0
@@ -165,10 +162,22 @@ export function assembleRows(fileEvents, machineId = "") {
       cacheReadTokens: acc.cacheReadTokens,
       cacheCreationTokens: acc.cacheCreationTokens,
       requests: acc.requests,
+      fieldEvidence: acc.fieldEvidence,
+      dateBasis: "KST",
       source: "uploader",
     }));
 
   return { rows, hourlyRows };
+}
+
+// Gemini session id = the `sessionId` of the file's header line
+// ({ sessionId, projectHash, startTime, lastUpdated, kind }); falls back to the
+// file stem (session-<datetime>-<short id>) when no header carries one.
+export function sessionIdFromLines(lines, file) {
+  for (const entry of lines) {
+    if (typeof entry?.sessionId === "string" && entry.sessionId) return entry.sessionId;
+  }
+  return fileStem(file);
 }
 
 function chatsRoot() {
@@ -192,11 +201,13 @@ async function* sessionFiles(dir) {
   }
 }
 
-// Same { rows, hourlyRows, stats } contract as codex.mjs / claude-code.mjs.
+// Same { rows, hourlyRows, sessions, health, stats } contract as codex.mjs / claude-code.mjs.
 export async function aggregate({ sinceDate, machineId = "" } = {}) {
   const stats = { files: 0, linesRead: 0, malformed: 0, events: 0 };
-  const sinceMs = sinceDate ? Date.parse(`${sinceDate}T00:00:00Z`) : 0;
+  // mtime window starts at KST midnight of sinceDate (events use KST dates).
+  const sinceMs = sinceDate ? Date.parse(`${sinceDate}T00:00:00+09:00`) : 0;
   const fileEvents = [];
+  const sessionEvents = [];
 
   for await (const file of sessionFiles(chatsRoot())) {
     if (sinceMs) {
@@ -224,8 +235,23 @@ export async function aggregate({ sinceDate, machineId = "" } = {}) {
     const events = foldSession(lines).filter((e) => !sinceDate || e.date >= sinceDate);
     stats.events += events.length;
     if (events.length) fileEvents.push(events);
+    const sessionId = sessionIdFromLines(lines, file);
+    for (const e of events) {
+      sessionEvents.push({
+        tool, sessionId, ts: e.ts, hour: e.hour, model: e.model,
+        inputTokens: e.inputTokens, outputTokens: e.outputTokens,
+        cacheReadTokens: e.cacheReadTokens, cacheCreationTokens: e.cacheCreationTokens,
+        fieldEvidence: e.fieldEvidence,
+      });
+    }
   }
 
   const { rows, hourlyRows } = assembleRows(fileEvents, machineId);
-  return { rows, hourlyRows, stats };
+  const sessions = bucketEvents(sessionEvents);
+  const health = makeHealth(
+    tool,
+    { filesScanned: stats.files, linesUnrecognized: stats.malformed },
+    sessions,
+  );
+  return { rows, hourlyRows, sessions, health, stats };
 }

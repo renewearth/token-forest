@@ -1,7 +1,7 @@
 # token-forest
 
-팀 구성원의 AI 툴(Cursor, Claude Code, Codex/OpenAI, Copilot, …) 토큰 사용량을
-통합 형식으로 수집·추적하는 셀프호스트 대시보드. 목적은 **사용량·도입률 분석**이다.
+팀 구성원의 AI 툴(Cursor, Claude Code, Codex, Copilot, …) 토큰 사용량을
+통합 형식으로 수집·추적하는 셀프호스트 대시보드. 목적은 **팀이 AI를 얼마나, 어떻게 사용하는지 쉽게 보여주는 것**이다. 사용량만으로 역량·성과·AX 단계를 평가하지 않는다.
 
 > Self-hostable, Apache-2.0. 한 조직 = 한 배포(멀티테넌시 없음). 각자 자기 인프라에서
 > 돌리며, 사용량 데이터는 자기 DB를 벗어나지 않는다.
@@ -11,21 +11,26 @@
 ```
 [Cursor Admin API]  ┐
 [Anthropic Admin]   ├─ 폴러 (in-process cron, 매 정시) ───────┐
-[OpenAI Usage API]  │                                         ├─→ MongoDB ─→ 웹 대시보드
-[GitHub per-user]   ┘                                         │        └──→ Slack 주간 리포트 (월 09:30 KST)
-[로컬 업로더 CLI (Claude Code 개인 계정)] ─┐                  │
-[수동 입력 폼 / CSV 임포트]              ─┴─ POST /api/ingest ┘
+[Gemini Workspace] │                                         ├─→ MongoDB ─→ 웹 대시보드
+[GitHub billing]   ┘                                         │        └──→ Slack 주간 리포트 (월 09:30 KST)
+[로컬 업로더 CLI (Claude Code·Codex·Gemini·Grok·opencode)] ─┐   │
+[수동 입력 폼 / CSV 임포트]                                 ─┴─ POST /api/ingest ┘
+   (업로더는 세션 단위로 전송 — 서버가 필드별 최댓값으로 병합)
 ```
 
-- 모든 유입 경로는 동일한 `UsageRow[]` 형식(`src/lib/types.ts`)으로
+- 폴러·수동 입력 경로는 동일한 `UsageRow[]` 형식(`src/lib/types.ts`)으로
   `(date, tool, model, external_id)` 키에 **일일 총량을 멱등 upsert**한다.
+- 업로더는 **세션 단위**로 보낸다(수집 v2). 서버는 같은 세션을 **필드별 최댓값으로
+  병합**하므로, 여러 기기나 동기화로 복제된 세션도 한 번만 집계되고 겹치게 다시
+  보내도 합계가 부풀지 않는다. 일 단위 합계는 세션에서 읽을 때 계산한다.
 - `tool`은 자유 문자열 — 신규 툴은 스키마 변경 없이 추가된다.
-- 토큰이 없는 툴(Copilot)은 `requests`(premium request 수)로 활동량을 기록한다.
+- Copilot 과금량과 웹·앱 보고서는 `UsageReportRow[]`로 별도 보관한다. 토큰·호출 수 그래프에 자동 합산하지 않는다.
+- 누락 지표는 null, 원천의 0은 0으로 유지하며 `fieldEvidence`와 일자 기준을 함께 보존한다. `/collection`에서 도구별 범위와 받은 보고서를 확인한다.
 - 구성원 온보딩은 `/me`의 단계형 마법사가 안내(도구 선택 → 자동 연결 → 업로더 설치
   자동 감지). 완료 후엔 체크리스트로 전환, `/me?step=claude_code`로 단계 단독 재실행.
-- 팀 분석(`/team`): 도입 확산(도입률·매트릭스·비활성) / 사용 패턴(효율·티어 믹스·
-  히트맵 등) / 용량 계획(한도 피크 히스토리·도달 일수·좌석 활용) 3섹션.
-  대시보드(`/`)는 상태 스캔용(타일·토큰 추이·리더보드·한도·신선도)으로 슬림하게 유지.
+- 홈과 팀 분석은 **구성원별 사용 흐름·도구별 누적·전체 합계선**을 함께 제공한다. 범례의 사람 선택은 합계를 바꾸지 않는다.
+- 홈 상단에 기존 성장형 숲(시간대별 배경·나무 단계·레벨·연속 기록·장식·동물)을 표시한다. 배치는 순위가 아니며 종합 성숙도 단계는 제공하지 않는다. 개인 게임 상세는 `/me`에서 펼쳐 본다.
+- `/knowhow`의 업무 실험은 초안에서 시작해 공개 대상을 확인한 뒤 공유한다. 악화·판단 유보·중단과 타인의 적용 후기도 기록할 수 있다.
 
 ## 시작하기
 
@@ -48,7 +53,6 @@ pnpm member add --name "김OO" --email kim@example.com
 
 # 툴별 ID 매핑 (커넥터가 주는 사용자 식별자 → 구성원)
 pnpm member identity --email kim@example.com --tool cursor --external-id kim@example.com
-pnpm member identity --email kim@example.com --tool openai --external-id user-abc123
 pnpm member identity --email kim@example.com --tool copilot --external-id kim-github
 
 # Copilot 개인 계정: "Plan: read" 권한 GitHub 토큰 등록
@@ -86,15 +90,20 @@ pnpm report --dry-run              # 주간 슬랙 리포트 미리보기
 
 | 사용 형태 | 수집 | 경로 |
 |---|---|---|
-| Cursor 팀 / 회사 OpenAI 키 | ✅ 자동 | 서버 폴러 |
-| Claude Code CLI·데스크톱 앱 (로컬 세션) | ✅ | 업로더 — 다중 기기 합산 지원(machineId) |
+| Cursor 팀 | 지원 | 서버 폴러 — 관리자 키 필요 |
+| OpenAI 직접 API | 미구현 | 기존 문서에만 있던 지원 표기를 정정. 공유 서비스 귀속·중복 범위 확인 후 추가 |
+| Claude Code CLI·데스크톱 앱 (로컬 세션) | ✅ | 업로더 (세션 단위) |
+| Codex CLI · Gemini CLI · Grok API 래퍼 | 지원 | 업로더 (로컬 세션 로그). Grok 웹 일반 수집 아님 |
+| opencode (Copilot Pro+ 등 연결한 모든 공급자 포함) | ✅ | 업로더 — 로컬 `opencode.db`를 읽기 전용으로 조회 |
+| 여러 기기 | ✅ | **모든 기기에 업로더 설치 권장.** 세션 단위 중복 제거라 같은 세션이 여러 기기에서 잡혀도 한 번만 집계 |
 | 폰 Remote Control | ✅ | 세션이 도는 호스트 머신의 업로더 |
 | Claude Code 웹 클라우드 세션 | ⚠️ | 로컬로 이어받은 세션만 |
-| claude.ai 채팅·Cowork | ❌ 정밀 수집 불가 (Team 플랜 API 없음) | 간접: 한도 소진율 스냅샷(`claude_limits`) + 수동 입력 |
-| Copilot 개인 계정 | ✅ | /me에서 PAT 등록 |
+| claude.ai 채팅·Cowork | 공식 CSV 가져오기 준비 | Enterprise API는 Primary Owner 활성화·권한 확인 필요. 전체/초과분·기간을 별도로 보존 |
+| ChatGPT·Work·Codex 클라우드 | 미연결 | 실제 워크스페이스 Analytics API 스키마/권한 확인 필요 |
+| Gemini 웹·Workspace | 활동 API 경로 준비 | 관리자 OAuth 필요. 능동 기능 사용만, 토큰 미제공 |
+| Copilot 개인/조직 | 과금 보고서 | 개인은 /me PAT, 조직은 별도 billing 권한. AI credit/legacy 방식 지정 |
 
-**중복 방지**: 같은 계정이 여러 경로로 잡혀도 소스 우선순위(poller > uploader > manual)로
-한 경로만 집계된다. `claude_limits`는 %지표라 사용량 합계에서 항상 제외.
+**중복 방지**: 업로더끼리는 세션 단위로 병합된다(위 표). 기존 일별 수집의 소스 우선순위(poller > uploader > manual)는 같은 도구·외부 ID·날짜·모델에만 적용된다. 서로 다른 계정·시간대의 동일성을 보장하지 않으므로 한 계정에 주 수집원 하나를 정한다. 신규 공식 보고서는 별도 보관하고 주 수집원 확정 전 자동 합산하지 않는다. `claude_limits`는 %지표라 사용량 합계에서 항상 제외.
 
 **개인 계정 제외 (수집 경계 = 프로필)**: 사용량 스캔·다이제스트 재료는
 **기본 프로필(`~/.claude`)만** 대상이다. 개인 계정을 별도
@@ -117,14 +126,64 @@ pnpm report --dry-run              # 주간 슬랙 리포트 미리보기
 
 이로써 서버로 나가는 데이터는 다시 **토큰 수(및 한도 %)뿐**이다.
 
+### 업로더 (요약)
+
+- **수집 창**: 마지막 성공 이후 바뀐 파일만 + **주 1회 전체 재전송**. 첫 실행은 로컬
+  로그 전체 백필. 지금 전부 다시 보내려면 `--full`. 기기에 이름을 붙이려면
+  `--device-label <이름>`(본인 `/me`에만 표시). 상태 폴더는 `TOKEN_FOREST_STATE_DIR`.
+- 동시에 한 번에 하나만 실행(run lock). 보낼 세션이 없어도 기기 생존 신호(heartbeat)를
+  보낸다. **구 서버**가 v2 형식을 거부하면 v1(일 단위) 형식으로 자동 전환한다.
+- 옵션·환경변수 전체는 [`packages/uploader/README.md`](packages/uploader/README.md).
+
+### `/me` 기기 표
+
+기기별 이름표(`--device-label`), 마지막 업로드·마지막 수집일, 상태 경고를 보여준다.
+**24시간 넘게 업로드가 없으면** 경고 배지가 붙고, 파서가 로그 형식을 못 읽거나
+건너뛴 경우 파서 경고가 표시된다.
+
+### 한도 게이지 (Claude·Codex)
+
+한도는 사용량 합계와 별개 축(%)이다. Codex는 **5시간/주간** 창을 기기별로 보여준다
+(Codex 로그인이 기기마다 다르기 때문). Claude는 계정별.
+
+### 단가표 `/pricing`과 단위 전환
+
+- `/pricing`: 모델 계열별 **공개 단가표**. 구성원 누구나 등록하되 **출처 URL(https)
+  필수**. 계열은 버전별 단가를 가지며(과거 사용량엔 그 시점 단가 적용), 사용량이
+  있는데 단가가 없는 모델은 **"단가 미정" 목록**에 뜬다.
+- 등록 규칙: 기존 계열에 버전을 더하면 매칭 패턴을 그대로 상속한다. 새 계열은 패턴을
+  직접 지정한다 — 부분 일치는 **3자 이상**, 정확히 일치는 `=이름`.
+- 사용량 화면(`/`·`/me`·`/members`·구성원 상세·`/team`)에서 **집계 기준**과 **표시 단위**를 독립적으로 선택한다. 카드·차트·표에 같은 선택을 적용한다.
+  - `basis=all` **전체 처리량(기본)**: 일반 입력 + 캐시 읽기 + 캐시 쓰기 + 출력
+  - `basis=no-cache-read` **캐시 읽기 제외**: 일반 입력 + 캐시 쓰기 + 출력
+  - `basis=output` **출력량**: 출력만
+  - `basis=legacy` **기존 기준**: 일반 입력 + 출력
+  - `basis=requests` **요청 수**: 수집된 요청 건수. 표시 단위는 항상 `건`이며 가격 환산하지 않는다.
+  - `unit=raw` 토큰, `unit=usd` API 정가 환산 $, `unit=ref&ref=<계열>` 기준 모델 환산 토큰.
+  - 모든 단위는 선택된 토큰 항목만 계산한다. 달러는 **실제 지출이 아닌 공개 단가 환산**이며, 기준 모델 토큰은 종류별 토큰 × 모델 단가 ÷ 기준 단가다.
+  - `basis`·`unit`·`ref`·`days`는 기간 전환과 사용량 화면 이동 시 URL에 유지된다. 예: `/?basis=no-cache-read&unit=usd&days=7`.
+  - 네 토큰 항목은 저장된 값을 그대로 두고 조회 때 계산한다. 누락 항목은 관측 상태로 구분하고 유효한 부분만 합산한다. 전부 미확인이면 `—`이며, 모든 항목이 미환산이면 환산값도 `—`다. 단가 미정은 선택된 항목의 원본 토큰으로 안내한다. 상세 표의 네 항목은 환산 전 토큰이다.
+  - 표시 선택은 개인의 기존 성장 계산과 계정 한도 값을 바꾸지 않는다. 종합 성숙도 단계는 표시하지 않는다.
+  - heartbeat는 과거 수집 완료 증거가 아니다. 실제 사용량 0과 미확인을 구분하며, 소스의 일자 기준(KST/UTC/미확인)을 함께 읽어야 한다.
+
+### 관리자: 롤아웃·대사
+
+- **롤아웃**: 서버를 먼저 배포한 뒤 업로더를 재설치한다. 구 업로더는 그대로 동작한다
+  (v1 형식으로 계속 수집).
+- `pnpm compare-sessions -- --member <email>`: 세션(v2)과 구 일 단위(legacy) 합계를
+  도구 × 기기 × 날짜로 비교(읽기 전용, 5초 대기 후 조회).
+- `node packages/uploader/src/scripts/audit-local.mjs`: 세션화 없이 이 기기 로컬 로그를
+  도구 × 날짜로 독립 집계(읽기 전용, 숫자만 출력) — 서버 값과 대조용.
+
 ## 데이터 소스 (커넥터)
 
 | tool | 소스 | 단위 | env |
 |---|---|---|---|
 | `cursor` | Admin API `daily-usage-data`(활동) + `filtered-usage-events`(모델별 토큰·비용) | 토큰+요청 | `CURSOR_API_KEY` |
 | `claude_code` | Anthropic `usage_report/claude_code` (조직) **또는** 로컬 업로더 (개인) — 한도는 계정별(1:N), 여러 계정 동시 추적은 업로더 `--claude-dir` | 토큰+세션 | `ANTHROPIC_ADMIN_KEY` |
-| `openai` | `organization/usage/completions` (user_id·model별; `OPENAI_EXCLUDE_PROJECTS`로 서비스 프로젝트 API 키 사용량 제외) | 토큰+요청 | `OPENAI_ADMIN_KEY` |
-| `copilot` | 구성원별 GitHub `premium_request/usage` (월 단위 API → 동기화 시점마다 증분을 일 단위로 기록) | 요청만 | 구성원별 토큰 (DB 암호화 저장) |
+| OpenAI | 미구현 (워크스페이스 스키마/권한 확인 필요) | 확인 전 | 없음 |
+| `copilot` | 개인/조직 `ai_credit/usage` 또는 `premium_request/usage`의 day 조회 | 과금 단위 · 별도 보고서 | `COPILOT_BILLING_MODE`, 개인 암호화 PAT 또는 조직 환경 설정 |
+| `gemini_workspace` | Admin Reports `gemini_in_workspace_apps` 활동 | 능동 기능 사용 건수 · 별도 보고서 | `GEMINI_WORKSPACE_CUSTOMER_ID`, `GEMINI_WORKSPACE_ACCESS_TOKEN` |
 
 > **주의**: 같은 사람이 Claude **조직** 계정(Anthropic 폴러)과 **개인** 업로더를 동시에 쓰면
 > 같은 `(날짜, claude_code, 모델, 이메일)` 키에 서로 덮어쓴다. 한 사람당 한 경로만 사용할 것
@@ -145,9 +204,7 @@ pnpm report --dry-run              # 주간 슬랙 리포트 미리보기
 크로스기기 집계에서 성장 포인트를 계산하므로 어느 기기에서 열어도 같은 나무다.
 
 - 서버 엔드포인트: `GET /api/me/summary`(본인 `tmk_` 토큰 인증, 개인 데이터만).
-- 성장 규칙: 온보딩 이후 **활동일·꾸준함(스트릭)·효율(캐시 적중·툴 다양성)**에만
-  연동 — 토큰 소비량은 성장에 기여하지 않는다(과소비 유인 차단). 엔진은
-  `src/lib/growth.ts`(순수 함수), 검증은 `src/scripts/verify-growth.ts`.
+- 기존 성장 규칙: 활동일·연속 기록에 게임 보너스를 더한다. 보너스에는 출력/캐시 쓰기와 도구 수, 복구에는 요청 수·출력량 조건이 있어 사용량과 완전히 무관하지 않다. 업무 성과 평가가 아니다. 엔진은 `src/lib/growth.ts`, 검증은 `src/scripts/verify-growth.ts`이며 이번 변경은 기존 계산·개인 summary API를 유지한다.
 
 ### 네이티브 앱 (macOS, 권장)
 
@@ -241,3 +298,14 @@ mongodump --uri mongodb://127.0.0.1:27201/token-meter --archive=token-forest-$(d
 `.env.example` 참고. 필수: `TOKEN_FOREST_SECRET`(구성원 GitHub 토큰 암호화 키).
 커넥터 키는 비워두면 해당 커넥터만 비활성화된다. `TOKEN_FOREST_DISABLE_CRON=1`로
 내장 cron을 끌 수 있다(개발 시).
+
+
+## 업무 실험의 공개 범위
+
+- `TOKEN_FOREST_EXPERIMENTS_MODE=off|pilot|team` (기본 `off`): 새 실험 작성·공유의 활성화 범위.
+- `TOKEN_FOREST_EXPERIMENTS_PILOT_IDS`: 쉼표로 구분한 등록 구성원 ID. 시범 공유 시 해당 목록을 고정 사본으로 저장한다.
+- 시범 대상에 새 사람을 추가하거나 `team`으로 바꿔도 기존 글·후기를 자동 확대 공개하지 않는다. 원문과 후기의 작성자가 각각 다시 확인해야 한다.
+- 비공개 초안과 철회한 글은 소유자만 읽는다. 기능을 꺼도 본인이 저장한 기록을 읽고 철회·삭제할 수 있다.
+- 원문 수정과 후기 공유는 버전 검사를 거친다. 후기의 실제 적용 버전은 현재 원문의 버전으로 자동 덮어쓰지 않는다.
+- 기존 일반 노하우와 `/api/knowhow` 자동 주입은 기존 경로를 사용한다. 실험 컬렉션을 갱신하거나 자동 공개하지 않는다.
+- 실험·후기의 결과와 측정치는 자기 보고와 직접 측정을 구분하며, 개인 점수·작성률·조직 ROI로 합산하지 않는다.

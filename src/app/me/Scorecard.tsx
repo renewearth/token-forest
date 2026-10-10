@@ -2,16 +2,16 @@ import { Card } from "@/app/_components/ui";
 import { InfoTip } from "@/app/_components/InfoTip";
 import { METRIC_INFO } from "@/lib/metric-info";
 import { getScorecardSums, getGrowthDays } from "@/lib/queries";
+import { getViewer } from "@/lib/auth";
 import { connectDb, Member } from "@/lib/db";
-import { computeGrowth } from "@/lib/growth";
-import { todayKst, teamEpoch, isoDaysAgo, todayUtc } from "@/lib/date";
+import { isoDaysAgo, todayUtc } from "@/lib/date";
 import {
   EMPTY_SUMS, addSums, cacheReuseRatio, contextYield, sessionDepth,
   requestAnatomy, toolEntropy, median,
 } from "@/lib/scorecard";
 import type { ScoreSums } from "@/lib/scorecard";
 
-// AI 활용 스코어카드(개인) — 4축, 본인 값 + 팀 중앙값 대비. 원값만, 점수화 없음.
+// 내 사용 특성(개인) — 4축, 본인 값 + 팀 중앙값 대비. 원값만, 점수화 없음.
 // 무방향 지표(세션 깊이)는 화살표 없이 값만 (스펙 — 게이밍/오독 방지).
 const RANGE_DAYS = 28;
 
@@ -45,11 +45,13 @@ function num(v: number | null, digits = 1): string {
 }
 function delta(mine: number | null, team: number | null, higherBetter: boolean): string {
   if (mine == null || team == null) return "";
-  const up = mine > team;
-  return up === higherBetter ? " ▲" : " ▼";
+  void higherBetter;
+  return ` (팀 중앙값 ${team.toFixed(2)})`;
 }
 
 export default async function Scorecard({ memberId }: { memberId: string }) {
+  const viewer = await getViewer();
+  if (viewer.status !== "member" || viewer.member.id !== memberId) return null;
   const range = { from: isoDaysAgo(RANGE_DAYS), to: todayUtc() };
   const rows = await getScorecardSums(range);
   const perMember = fold(rows);
@@ -62,7 +64,6 @@ export default async function Scorecard({ memberId }: { memberId: string }) {
     ? new Date(me.onboardedAt).toISOString().slice(0, 10)
     : null;
   const days = await getGrowthDays(memberId, onboarded ?? "1970-01-01");
-  const g = computeGrowth(days, teamEpoch(), todayKst());
   const weeklyActive = days.filter((d) => d.date >= isoDaysAgo(7)).length;
 
   const others = [...perMember.values()];
@@ -74,30 +75,30 @@ export default async function Scorecard({ memberId }: { memberId: string }) {
   const myYield = contextYield(mine.total);
 
   return (
-    <Card title="AI 활용 스코어카드" hint={`최근 ${RANGE_DAYS}일 · 팀 중앙값 대비 · 순위 없음`}>
+    <Card title="내 사용 특성" hint={`최근 ${RANGE_DAYS}일 · 팀 중앙값 대비 · 순위 없음`}>
       <div className="space-y-3 text-sm">
         <section>
-          <h3 className="text-xs font-semibold text-[var(--text-muted)]">습관화</h3>
-          <p>주간 활동일 {weeklyActive}/7 · 스트릭<InfoTip info={METRIC_INFO.streak} /> 🔥{g.streakDays} (최고 {g.bestStreak})</p>
+          <h3 className="text-xs font-semibold text-[var(--text-muted)]">수집된 활동일</h3>
+          <p>주간 활동일 {weeklyActive}/7 · 전체 수집 범위 미확인</p>
         </section>
         <section>
-          <h3 className="text-xs font-semibold text-[var(--text-muted)]">효율</h3>
+          <h3 className="text-xs font-semibold text-[var(--text-muted)]">캐시와 출력 특성</h3>
           <p>캐시 재사용 배율<InfoTip info={METRIC_INFO.cacheReuse} /> {num(myReuse)}{delta(myReuse, med((m) => cacheReuseRatio(m.total)), true)} · 컨텍스트 수율<InfoTip info={METRIC_INFO.contextYield} /> {pct(myYield)}{delta(myYield, med((m) => contextYield(m.total)), true)}</p>
-          <p className="text-xs text-[var(--text-muted)]">컨텍스트 수율은 새로 끌어온 컨텍스트 1토큰당 산출량입니다 — 높을수록 맥락을 알차게 씁니다.</p>
+          <p className="text-xs text-[var(--text-muted)]">컨텍스트 수율은 새로 끌어온 컨텍스트 1토큰당 산출량입니다 — 비율의 높낮이로 작업의 성과를 판단하지 않습니다.</p>
         </section>
         <section>
-          <h3 className="text-xs font-semibold text-[var(--text-muted)]">숙련</h3>
+          <h3 className="text-xs font-semibold text-[var(--text-muted)]">세션 특성</h3>
           <p>세션 깊이<InfoTip info={METRIC_INFO.sessionDepth} /> {num(sessionDepth(mine.claude))} 턴/세션 <span className="text-[var(--text-muted)]">(Claude Code · 방향 없음 — 작업 스타일)</span></p>
           {myAnatomy && (
             <p>요청 1건 구성<InfoTip info={METRIC_INFO.requestAnatomy} /> — 입력 {Math.round(myAnatomy.inputPerReq).toLocaleString()} · 캐시 {Math.round(myAnatomy.cachePerReq).toLocaleString()} · 생성 {Math.round(myAnatomy.outputPerReq).toLocaleString()} 토큰</p>
           )}
         </section>
         <section>
-          <h3 className="text-xs font-semibold text-[var(--text-muted)]">확장</h3>
+          <h3 className="text-xs font-semibold text-[var(--text-muted)]">사용 도구와 모델</h3>
           <p>도구 다양성<InfoTip info={METRIC_INFO.toolBreadth} /> {num(toolEntropy(mine.byTool), 2)}{delta(toolEntropy(mine.byTool), med((m) => toolEntropy(m.byTool)), true)} · 사용 모델 {mine.models.size}종</p>
         </section>
         <p className="text-[11px] text-[var(--text-muted)]">
-          이 카드는 본인에게만 보입니다. 나무(성장)는 습관 동기부여용, 스코어카드는 정밀 분석 — 다르게 보이면 스코어카드가 기준입니다.
+          이 카드는 본인에게만 보입니다. 수집된 사용 특성으로 역량이나 업무 성과를 평가하지 않습니다.
         </p>
       </div>
     </Card>

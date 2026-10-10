@@ -15,6 +15,7 @@
     "member": "tsx src/scripts/member.ts",
     "sync": "tsx src/scripts/sync.ts",
     "report": "tsx src/scripts/report.ts",
+    "compare-sessions": "tsx src/scripts/compare-sessions-legacy.ts",
     "ax-metrics": "tsx src/scripts/ax-metrics.ts",
     "verify-cron": "tsx src/scripts/verify-cron.ts",
     "verify-models": "tsx src/scripts/verify-models.ts"

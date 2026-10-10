@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb, Member } from "@/lib/db";
-import { anonymizeMachineId } from "@/lib/machine-id";
+import { handleIngest } from "@/lib/ingest";
 import { ingestPayloadSchema } from "@/lib/types";
-import {
-  registerIdentities,
-  upsertHourlyRows,
-  upsertUsageRows,
-} from "@/lib/usage";
 
 // Universal ingestion endpoint: uploader CLI, manual entry, any future tool
 // without a central API. Auth: per-member bearer token (members.ingestToken).
+// Accepts the v1 payload (rows + hourly, old uploaders) and the v2 payload
+// (sessions + health + device); the body lives in src/lib/ingest.ts. Response
+// keeps the v1 fields (upserted, skipped, hourlyUpserted) and adds
+// sessionsUpserted + derived — old uploaders ignore unknown fields.
 export async function POST(req: NextRequest) {
   const auth = req.headers.get("authorization") ?? "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
@@ -36,41 +35,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Rows always belong to the authenticated member: externalId is forced to
-  // their email (any caller-supplied value is ignored) so one member cannot
-  // write or overwrite usage attributed to another.
-  // v1.1 uploaders still in the wild send plan-limit snapshots as
-  // tool:"claude_limits" usage rows; those percentages must never enter usage
-  // totals (limits now live in their own collection via /api/limits), so drop
-  // them here.
-  const rows = parsed.data.rows
-    .filter((row) => row.tool !== "claude_limits")
-    .map((row) => ({
-      ...row,
-      externalId: member.email,
-      machineId: anonymizeMachineId(row.machineId ?? ""),
-    }));
-  if (rows.length === 0) {
-    return NextResponse.json({ ok: true, upserted: 0, skipped: 0 });
-  }
-  await registerIdentities(
-    [...new Set(rows.map((r) => r.tool))].map((tool) => ({
-      memberId: String(member._id),
-      tool,
-      externalId: member.email,
-    })),
-  );
-  const { upserted, skipped } = await upsertUsageRows(rows);
-
-  // Optional hour-grained rows (heatmap only) — same member-forced externalId.
-  let hourlyUpserted = 0;
-  if (parsed.data.hourly?.length) {
-    const hourly = parsed.data.hourly.map((row) => ({
-      ...row,
-      externalId: member.email,
-      machineId: anonymizeMachineId(row.machineId ?? ""),
-    }));
-    ({ upserted: hourlyUpserted } = await upsertHourlyRows(hourly));
-  }
-  return NextResponse.json({ ok: true, upserted, skipped, hourlyUpserted });
+  const result = await handleIngest(member, parsed.data);
+  return NextResponse.json({ ok: true, ...result });
 }

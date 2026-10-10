@@ -1,0 +1,22 @@
+"use server";
+import { revalidatePath } from "next/cache";
+import { Member } from "@/lib/db";
+import { requireMember } from "@/lib/auth";
+import { assertPublish, audienceSubset, enabledFor, ExperimentError, proposedAudience, reviewPublishErrors, type Audience, type ExperimentInput, type ReviewInput } from "@/lib/experiments";
+import * as service from "@/lib/experiments-service";
+export type ActionResult<T> = { ok: true; value: T } | { ok: false; error: string; code: string; fields: Record<string, string> };
+async function run<T>(fn: (memberId: string) => Promise<T>): Promise<ActionResult<T>> { try { const member = await requireMember(); const value = await fn(member.id); revalidatePath("/knowhow", "layout"); revalidatePath("/me"); revalidatePath("/"); return { ok: true, value }; } catch (error) { if (error instanceof ExperimentError) return { ok: false, error: error.message, code: error.code, fields: error.fields }; return { ok: false, error: "저장·조회하지 못했습니다. 로그인 상태를 확인하고 다시 시도하세요. 입력은 유지됩니다.", code: "unavailable", fields: {} }; } }
+export async function createExperimentAction(id: string, input: ExperimentInput) { return run((viewer) => service.createExperiment(viewer, id, input)); }
+export async function saveExperimentAction(id: string, version: number, input: ExperimentInput, requestId: string) { return run((viewer) => service.saveExperiment(viewer, id, version, input, requestId)); }
+async function audienceNames(audience: Audience) { if (audience.kind === "team") return []; const rows = await Member.find({ _id: { $in: audience.memberIds } }, { name: 1 }).lean(); return rows.map((row) => `${row.name} (${String(row._id).slice(-6)})`); }
+export async function previewExperimentAction(id: string) { return run(async (viewer) => { if (!enabledFor(viewer)) throw new ExperimentError("disabled", "현재 공유할 수 없습니다."); const e = await service.getExperiment(viewer, id); if (!e?.isOwner) throw new ExperimentError("not_found", "기록을 찾을 수 없습니다."); assertPublish(e.input); const audience = proposedAudience(); return { experiment: e, audience, audienceNames: await audienceNames(audience) }; }); }
+export async function publishExperimentAction(id: string, consent: service.ParentConsent, audience: Audience, requestId: string) { return run((viewer) => service.publishExperiment(viewer, id, consent, audience, requestId)); }
+export async function withdrawExperimentAction(id: string, consent: service.ParentConsent, requestId: string) { return run((viewer) => service.withdrawExperiment(viewer, id, consent, requestId)); }
+export async function deleteExperimentAction(id: string, requestId: string) { return run((viewer) => service.deleteExperiment(viewer, id, requestId)); }
+export async function saveReviewAction(id: string, version: number, input: ReviewInput, requestId: string) { return run((viewer) => service.saveReview(viewer, id, version, input, requestId)); }
+export async function previewReviewAction(id: string) { return run(async (viewer) => { if (!enabledFor(viewer)) throw new ExperimentError("disabled", "현재 공유할 수 없습니다."); const e = await service.getExperiment(viewer, id); const r = await service.getOwnReview(viewer, id); if (!e || e.status !== "published" || !r) throw new ExperimentError("not_found", "기록을 찾을 수 없습니다."); const errors = reviewPublishErrors(r.input); if (Object.keys(errors).length) throw new ExperimentError("validation", "후기 필수 항목을 확인하세요.", errors); const proposed = proposedAudience(); const audience = e.audience && !audienceSubset(proposed, e.audience) ? e.audience : proposed; return { experiment: e, review: r, audience, audienceNames: await audienceNames(audience) }; }); }
+export async function publishReviewAction(id: string, version: number, consent: service.ParentConsent, audience: Audience, requestId: string) { return run((viewer) => service.publishReview(viewer, id, version, consent, audience, requestId)); }
+export async function withdrawReviewAction(id: string, version: number, requestId: string) { return run((viewer) => service.withdrawReview(viewer, id, version, requestId)); }
+
+export async function reloadExperimentAction(id: string) { return run(async (viewer) => { const e = await service.getExperiment(viewer, id); if (!e?.isOwner) throw new ExperimentError("not_found", "기록을 찾을 수 없습니다."); return e; }); }
+export async function reloadReviewAction(id: string) { return run(async (viewer) => { const r = await service.getOwnReview(viewer, id); if (!r) throw new ExperimentError("not_found", "기록을 찾을 수 없습니다."); return r; }); }
