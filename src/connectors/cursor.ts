@@ -151,6 +151,7 @@ async function fetchActivityRows(
         externalId: email,
         requests,
         source: "poller",
+        dateBasis: "UTC",
         raw: day,
       });
     }
@@ -279,6 +280,7 @@ async function fetchTokenRows(
     // token rows so aggregating both kinds doesn't double-count requests.
     costEstimateCents: agg.costCents,
     source: "poller" as const,
+    dateBasis: "UTC" as const,
   }));
 }
 
@@ -305,6 +307,7 @@ async function fetchTokenHourlyRows(
     cacheReadTokens: agg.cacheReadTokens,
     cacheCreationTokens: agg.cacheCreationTokens,
     source: "poller" as const,
+    dateBasis: "UTC" as const,
   }));
 }
 

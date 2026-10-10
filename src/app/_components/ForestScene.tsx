@@ -1,5 +1,6 @@
 // src/app/_components/ForestScene.tsx
-import { UsageLink as Link } from "@/app/_components/UsageLink";
+import { ForestActivityButton } from "@/app/_components/ActivityCalendar";
+import { activityBadgeDescription, type ActivityCalendarData } from "@/lib/activity-calendar";
 import { connectDb, Member, VISIBLE_MEMBER } from "@/lib/db";
 import { getGrowthDays } from "@/lib/queries";
 import { computeGrowth } from "@/lib/growth";
@@ -52,7 +53,7 @@ const BAND_HILL: Record<TimeBand, string> = {
   dawn: "#cbd6a9", day: "#c9d6ae", dusk: "#c2cd9e", night: "#24402f",
 };
 
-export default async function ForestScene({ band }: { band?: TimeBand }) {
+export default async function ForestScene({ band, activity }: { band?: TimeBand; activity: ActivityCalendarData }) {
   await connectDb();
   const members = await Member.find(VISIBLE_MEMBER, { name: 1, onboardedAt: 1 }).lean();
   if (members.length === 0) return <EmptyState message="등록된 구성원이 없습니다." />;
@@ -73,15 +74,17 @@ export default async function ForestScene({ band }: { band?: TimeBand }) {
   const animal = pickAnimal(hash32(`${today}-${kstHour}`), b);
   const pos = new Map(treeLayout(trees.map((t) => t.id)).map((p) => [p.id, p]));
 
+  const records = new Map(activity.people.map(p => [p.id, p]));
   const tagCls = night
     ? "mt-0.5 inline-block whitespace-nowrap rounded-lg bg-[#0e1a12cc] px-1.5 text-[10px] text-[#cfe6d5]"
     : "mt-0.5 inline-block whitespace-nowrap rounded-lg bg-[#ffffffcc] px-1.5 text-[10px] text-[#26302a]";
 
   return (
+    <div className="overflow-x-auto rounded-xl" aria-label="팀 숲 가로 이동">
     <section
       aria-label="팀 숲"
       className="fs-scene relative h-64 overflow-hidden rounded-xl border border-[var(--border)]"
-      style={{ background: BAND_BG[b] }}
+      style={{ background: BAND_BG[b], minWidth: Math.max(320, trees.length * 120) }}
     >
       <div className="absolute left-7 top-3 text-2xl">{night ? "🌙" : "☀️"}</div>
       {!night && (
@@ -114,11 +117,14 @@ export default async function ForestScene({ band }: { band?: TimeBand }) {
         const vv = vitalityView(t.g.vitality);
         const aura = orns.filter((o) => o.zone === "aura");
         const ember = t.g.ember;
+        const record = records.get(t.id);
+        const description = record ? activityBadgeDescription(record) : "AI 활동 기록 확인 중";
         return (
-          <Link
+          <ForestActivityButton
             key={t.id}
-            href={`/members/${t.id}`}
-            aria-label={`${t.name} — ${t.g.stageLabel}, ${t.g.gp} GP`}
+            memberId={t.id}
+            title={description}
+            aria-label={`${t.name} — ${t.g.stageLabel}, ${t.g.gp} GP · ${description} · 활동 달력 보기`}
             className="absolute bottom-9 -translate-x-1/2 text-center"
             style={{ left: `${p.xPct}%` }}
           >
@@ -191,14 +197,14 @@ export default async function ForestScene({ band }: { band?: TimeBand }) {
               })}
               <span className={tagCls}>
                 {t.name} Lv{t.g.level}
-                {t.g.streakDays >= 3
-                  ? ` 🔥${t.g.streakDays}`
-                  : ember
-                    ? ` 🟠${ember.length}`
-                    : ""}
+
+              </span>
+              <span className="mt-1 flex items-center justify-center gap-1" aria-hidden="true">
+                <span data-best-activity={t.id} className="rounded-full border border-[#dba56b] bg-[#fff1dc] px-1.5 py-0.5 text-[11px] font-semibold text-[#684019]">🔥{record?.best.length || "·"}</span>
+                <span data-current-activity={t.id} className={night ? "text-[9px] text-[#cfe6d5]" : "text-[9px] text-[#526147]"}>{record?.current ?? "·"}</span>
               </span>
             </span>
-          </Link>
+          </ForestActivityButton>
         );
       })}
       {animal === "🦉" ? (
@@ -222,5 +228,6 @@ export default async function ForestScene({ band }: { band?: TimeBand }) {
         </div>
       )}
     </section>
+    </div>
   );
 }

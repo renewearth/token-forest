@@ -26,7 +26,7 @@ export default function SymbolLegend() {
         {groups.map((g) => (
           <div key={g.axis}>
             <div className={headCls}>
-              {g.axisLabel}{" "}
+              {g.axisLabel}{g.axis === "streak" ? " · 나무 성장 기록" : ""}{" "}
               <span className="font-normal text-[var(--text-muted)]">— {g.meaning}</span>
             </div>
             <div className={rowCls}>
@@ -43,7 +43,7 @@ export default function SymbolLegend() {
           <div className={rowCls}>
             {STATE_LEGEND.map((s) => (
               <span key={s.emoji} className="whitespace-nowrap">
-                <span className="mr-0.5">{s.emoji}</span> {s.meaning}
+                <span className="mr-0.5">{s.emoji}</span> {s.emoji === "🔥" ? "최장 연속 AI 활동 (🔥N) · 작은 숫자는 현재 · 점은 확인 중" : s.meaning}
               </span>
             ))}
           </div>

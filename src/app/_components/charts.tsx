@@ -1,6 +1,7 @@
 "use client";
 
-import { observationLabel, type Observation } from "@/lib/observation";
+import { emptyObservation, observationLabel, type Observation } from "@/lib/observation";
+import { UsageChartTooltip, useUsageChartDetail } from "./UsageChartTooltip";
 import {
   Area,
   AreaChart,
@@ -132,6 +133,7 @@ export function StackedTokensChart({
   valueFormat = "count",
   showTotal = false,
   totalLabel = "수집된 전체 합계",
+  basisLabel = "수집 합계",
   observations,
 }: {
   data: Row[];
@@ -141,14 +143,19 @@ export function StackedTokensChart({
   valueFormat?: ValueFormat;
   showTotal?: boolean;
   totalLabel?: string;
+  basisLabel?: string;
   observations?: Record<string, Record<string, Observation>>;
 }) {
   const numStyle = useNumStyle();
-  const chartData = showTotal ? data.map((row) => ({ ...row, __total: Object.hasOwn(row, "__total") ? row.__total : tools.some((tool) => typeof row[tool] === "number") ? tools.reduce((sum, tool) => sum + Number(row[tool] ?? 0), 0) : null })) : data;
+  const detail = useUsageChartDetail();
+  const { attachChart } = detail;
+  const chartData: Row[] = showTotal ? data.map((row) => ({ ...row, __total: Object.hasOwn(row, "__total") ? row.__total : tools.some((tool) => typeof row[tool] === "number") ? tools.reduce((sum, tool) => sum + Number(row[tool] ?? 0), 0) : null })) : data;
+  const selected = chartData.find(row => row.date === detail.detail?.date);
+  const reading = (key: string): Observation => observations?.[detail.detail?.date ?? ""]?.[key] ?? { ...emptyObservation(), value: typeof selected?.[key] === "number" ? selected[key] as number : null };
   return (
-    <div>
+    <div ref={attachChart} onMouseLeave={detail.leave} onPointerDown={detail.pointer} onPointerMove={detail.pointer}>
       <ResponsiveContainer width="100%" height={height}>
-        <ComposedChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+        <ComposedChart data={chartData} onMouseMove={detail.move} onClick={detail.click} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
           <CartesianGrid stroke={GRID} vertical={false} />
           <XAxis
             dataKey="date"
@@ -163,9 +170,9 @@ export function StackedTokensChart({
             }
             {...axisProps}
           />
-          <Tooltip filterNull={false}
-            cursor={{ fill: "var(--grid)", opacity: 0.4 }}
-            content={<ChartTooltip unit={unit} valueFormat={valueFormat} observations={observations} />}
+          <Tooltip filterNull={false} content={() => null} active={detail.detail ? true : undefined} trigger={detail.touchMode || detail.detail?.pinned ? "click" : "hover"}
+            defaultIndex={detail.detail ? chartData.findIndex(row => row.date === detail.detail?.date) : undefined} isAnimationActive={false}
+            cursor={detail.detail?.pinned ? false : { fill: "var(--grid)", opacity: 0.4 }}
           />
           {tools.map((t, i) => (
             <Bar
@@ -179,9 +186,12 @@ export function StackedTokensChart({
               radius={i === tools.length - 1 ? [3, 3, 0, 0] : undefined}
             />
           ))}
-          {showTotal && <Line dataKey="__total" name={totalLabel} type="linear" stroke="var(--text-primary)" strokeWidth={3} strokeDasharray="8 4" dot={false} isAnimationActive={false} />}
+          {showTotal && <Line dataKey="__total" name={totalLabel} type="linear" stroke="var(--text-primary)" strokeWidth={3} strokeDasharray="8 4" dot={false} activeDot={detail.detail?.pinned ? false : undefined} isAnimationActive={false} />}
         </ComposedChart>
       </ResponsiveContainer>
+      <UsageChartTooltip control={detail} total={showTotal ? reading("__total") : undefined} totalLabel={totalLabel} groupLabel="도구"
+        basisLabel={basisLabel} unit={valueFormat === "usd" ? "usd" : "raw"} suffix={unit} numStyle={numStyle}
+        entries={tools.map(tool => ({ key: tool, name: toolLabel(tool), color: toolColor(tool), observation: reading(tool) }))} />
       <Legend tools={tools} />
       {showTotal && <p className="mt-2 flex items-center gap-2 text-xs text-[var(--text-secondary)]"><span aria-hidden="true" className="w-5 border-t-2 border-dashed border-current" />{totalLabel}</p>}
     </div>

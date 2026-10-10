@@ -25,6 +25,9 @@ import { UsageAnalysis } from "@/app/_components/UsageAnalysis";
 import LimitsOverview from "@/app/_components/LimitsOverview";
 import { SyncNowButton } from "@/app/_components/SyncNowButton";
 import { getNumStyle } from "@/app/_lib/numfmt";
+import { getActivityCalendar } from "@/lib/activity-calendar-query";
+import { todayKst } from "@/lib/date";
+import { ActivityCalendar, ActivityCalendarProvider } from "@/app/_components/ActivityCalendar";
 import ForestScene from "@/app/_components/ForestScene";
 import SymbolLegend from "@/app/_components/SymbolLegend";
 import UsageCharacteristics from "@/app/_components/UsageCharacteristics";
@@ -42,13 +45,15 @@ export default async function OverviewPage({
   // One basis and display unit for all usage totals and trends.
   const sel = resolveUnitSelection(await loadPriceTable(), params);
 
-  const [snapshot, freshness] = await Promise.all([
+  const [snapshot, freshness, activity] = await Promise.all([
     getUsageObservationSnapshot(range, sel), getUsageFreshness(),
+    getActivityCalendar().catch(() => ({ today: todayKst(), people: [], available: false })),
   ]);
   const { totals, tools: tokensByTool, people: tokensByMember } = snapshot;
   const unitKeep = { unit: sel.unit, ref: sel.ref ?? undefined, basis: sel.basis };
 
   return (
+    <ActivityCalendarProvider initialId={activity.people[0]?.id ?? ""}>
     <div>
       <PageHeader title="대시보드">
         <UsageLink href="/collection" className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--accent-strong)]">도구별 수집 상태</UsageLink>
@@ -57,12 +62,14 @@ export default async function OverviewPage({
         {range.from} ~ {range.to} · KST 기준
       </p>
 
-      <div className="mb-6"><ForestScene /></div>
+      <div className="mb-6"><ForestScene activity={activity} /></div>
       <div className="mb-6"><SymbolLegend /></div>
 
       <UsageAnalysis periodControl={<RangeTabs days={days} base="/" keep={unitKeep} />} selection={sel} total={totals.totalTokens} unpricedTokens={tokensByTool.unpricedTokens} numStyle={numStyle} observation={totals.observation} range={range}>
         <UsageComparison people={tokensByMember} tools={tokensByTool} unit={sel.unit} basis={sel.basis} />
       </UsageAnalysis>
+
+      <ActivityCalendar data={activity} />
 
       <div aria-label="활동 요약" className="my-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatTile
@@ -127,5 +134,6 @@ export default async function OverviewPage({
         </Card>
       </div>
     </div>
+    </ActivityCalendarProvider>
   );
 }
