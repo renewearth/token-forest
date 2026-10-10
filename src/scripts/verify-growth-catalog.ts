@@ -21,9 +21,9 @@ assert(
 
 // 엔진이 뱉는 unlocked 키가 전부 카탈로그에 존재 (verify-growth.ts 픽스처 재사용)
 const days: GrowthDay[] = [
-  { date: "2026-07-18", tools: ["claude_code", "openai"], input: 72046, cacheRead: 841908013, output: 3_000_000, cacheCreation: 10_000_000 },
-  { date: "2026-07-19", tools: ["claude_code", "openai"], input: 43580, cacheRead: 894918067, output: 3_000_000, cacheCreation: 10_000_000 },
-  { date: "2026-07-20", tools: ["claude_code", "openai"], input: 23724, cacheRead: 360484718, output: 3_000_000, cacheCreation: 10_000_000 },
+  { date: "2026-07-18", tools: ["claude_code", "codex"], tokens: 4_000_000, requests: 300, families: ["opus", "gpt"] },
+  { date: "2026-07-19", tools: ["claude_code", "codex"], tokens: 4_000_000, requests: 300, families: ["opus", "gpt"] },
+  { date: "2026-07-20", tools: ["claude_code", "codex"], tokens: 4_000_000, requests: 300, families: ["opus", "gpt"] },
 ];
 const g = computeGrowth(days, "2026-07-18", "2026-07-23");
 const keys = new Set(MILESTONE_CATALOG.map((m) => m.key));

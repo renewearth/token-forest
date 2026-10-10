@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDb, Member } from "@/lib/db";
 import { computeGrowth } from "@/lib/growth";
-import { getGrowthDays, getMyMachines, getLatestLimits } from "@/lib/queries";
+import { getGrowthDays, getMyMachines, getLatestLimits, getUnconfirmedGrowthDates } from "@/lib/queries";
 import { isoDaysAgo, todayKst, teamEpoch } from "@/lib/date";
 import { organizationLabels } from "@/lib/limit-window";
 
@@ -24,13 +24,15 @@ export async function GET(req: NextRequest) {
     ? new Date(member.onboardedAt).toISOString().slice(0, 10)
     : null;
 
-  const [days, machines, limits] = await Promise.all([
+  const today = todayKst();
+  const [days, machines, limits, unconfirmed] = await Promise.all([
     getGrowthDays(id, onboarded ?? "1970-01-01"),
     getMyMachines(member.email),
     getLatestLimits(id),
+    getUnconfirmedGrowthDates(today),
   ]);
 
-  const growth = computeGrowth(days, teamEpoch(), todayKst());
+  const growth = computeGrowth(days, teamEpoch(), today, undefined, unconfirmed);
 
   // 최근 7일 활동 툴 수.
   const since7 = isoDaysAgo(7);

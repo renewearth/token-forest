@@ -9,21 +9,18 @@ function assert(cond: boolean, msg: string) {
   console.log("ok:", msg);
 }
 
-// 기본값: floor 충족(output 60k≥50k, req 30≥20), eff 0(cacheCreation 0). 단일 툴.
+// 기본값: floor 충족(req 30≥20), 사용 보너스 0(토큰·요청 모두 1칸). 단일 툴.
 const day = (
   date: string,
-  o: { tools?: string[]; output?: number; cc?: number; req?: number } = {},
+  o: { tools?: string[]; tokens?: number; req?: number } = {},
 ): GrowthDay => ({
   date,
   tools: o.tools ?? ["claude_code"],
-  input: 0,
-  cacheRead: 0,
-  output: o.output ?? 60_000,
-  cacheCreation: o.cc ?? 0,
+  tokens: o.tokens ?? 60_000,
   requests: o.req ?? 30,
 });
-const highEff = (date: string) => day(date, { output: 300_000, cc: 1_000_000 }); // 수율0.3 → eff3
-const filler = (date: string) => day(date, { output: 1_000, req: 2 }); // floor 미달
+const highEff = (date: string) => day(date, { tokens: 4_000_000 }); // 4칸 → 사용 보너스 3
+const filler = (date: string) => day(date, { tokens: 1_000, req: 2 }); // floor 미달
 const EPOCH = "2026-08-01";
 
 // ── AC1: 주말 브릿지(C2) — 금 활동 → 토·일 결석 → 월 활동(floor)이면 연속 ──
@@ -54,7 +51,7 @@ const EPOCH = "2026-08-01";
   assert(g.streakDays === 1, `미복구 → 현재 streak 1 (got ${g.streakDays})`);
 }
 
-// ── AC3: 품질 보너스 — 복구 완료 + 창 내 하루가 도구≥2(또는 eff≥3)면 GP +5 ──
+// ── AC3: 품질 보너스 — 복구 완료 + 창 내 하루가 도구≥2(또는 사용 보너스≥3)면 GP +5 ──
 {
   const q = ["2026-08-17","2026-08-18","2026-08-19"].map((d) => day(d))
     .concat(day("2026-08-24", { tools: ["claude_code", "codex"] }), day("2026-08-25"));
@@ -63,7 +60,7 @@ const EPOCH = "2026-08-01";
   assert(computeRevival(plain, "2026-08-25").bonusGp === 0, "품질일 없음 → 보너스 0");
 }
 
-// ── AC4: 복구 토큰(C3) — 효율≥3 누적 5일당 1개, 출석 복구 실패 시 자동 소모 ──
+// ── AC4: 복구 토큰(C3) — 사용 보너스≥3 누적 5일당 1개, 출석 복구 실패 시 자동 소모 ──
 {
   const withToken = ["2026-08-03","2026-08-04","2026-08-05","2026-08-06","2026-08-07"]
     .map((d) => highEff(d)).concat(day("2026-08-11")); // 07→11 결석[08,09,10] quest, 창내 자격 1일

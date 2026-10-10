@@ -1,15 +1,31 @@
 import { DEFAULT_HOLIDAYS, addBusinessDays, addDays, isRestDay } from "./date";
 
-// 하루치 활동 재료(툴별 합산은 호출측에서 끝냄).
+// 하루치 활동 재료(도구·보고서 합산은 호출측 src/lib/growth-days.ts 에서 끝냄).
 export type GrowthDay = {
-  date: string; // YYYY-MM-DD (UTC)
-  tools: string[]; // 그날 활동한 distinct 툴
-  input: number; // 에이전틱 툴(claude_code·codex) input 합 (참고용)
-  cacheRead: number; // 에이전틱 툴 cacheRead 합 (참고용)
-  output: number; // 에이전틱 툴 output 합 (수율 분자)
-  cacheCreation: number; // 에이전틱 툴 cacheCreation 합 (수율 분모)
-  requests?: number; // 에이전틱 툴 요청 수 합 (복구 출석 플로어용). 없으면 0.
+  date: string; // YYYY-MM-DD
+  tools: string[]; // 그날 활동한 distinct 도구·제품
+  tokens: number; // 기준 모델 환산 토큰(캐시 읽기 제외) — 모든 도구 합. 사용량 계단 입력.
+  requests?: number; // 모든 도구 요청 수 합. 없으면 0.
+  families?: string[]; // 그날 "센" 모델 계열(사용량 10% 이상). 없으면 다양성 0.
 };
+
+// ── 사용 보너스 상수 ──
+// 2026-09~10 팀 일별 분포(업로더 + Claude 지출 보고서)로 맞춘 초기값이다.
+// 조정을 전제로 한 숫자이므로 규칙을 바꿀 때는 이 블록만 고친다.
+export const GP_RULES = {
+  // 사용량 계단: 하루 환산 토큰 또는 요청 수가 넘은 칸 중 높은 쪽(0~5칸).
+  tokenSteps: [50_000, 200_000, 1_000_000, 4_000_000, 15_000_000],
+  requestSteps: [10, 50, 250, 850, 2_000],
+  // 칸(0~5)별 사용량 보너스. 2칸부터 1점씩.
+  volumeBonusByStep: [0, 0, 1, 2, 3, 4],
+  // 다양성 보너스: 센 모델 계열 수 − 1, 이 값까지.
+  diversityBonusCap: 2,
+  // 하루 사용 보너스(사용량 + 다양성) 상한.
+  dailyBonusCap: 5,
+  // 복구 출석으로 인정하는 실사용: 요청 수 또는 사용량 칸.
+  floorRequests: 20,
+  floorVolumeStep: 2,
+} as const;
 
 export type GrowthState = {
   gp: number;
@@ -50,13 +66,12 @@ const REVIVAL_ATTENDANCE = 2; // C1 복구 퀘스트: 자격 활동 2일
 const BRIDGE_ATTENDANCE = 1; // C2 월요일 브릿지(주말유발): 영업일 1회
 const QUALITY_BONUS_GP = 5; // C1 품질 보너스(소량 GP)
 const TOKEN_CAP = 2; // C3 복구 토큰 잔액 상한
-const TOKEN_EARN_PER = 5; // 효율보너스 ≥3 누적 N일당 토큰 1개
-const FLOOR_REQUESTS = 20; // 복구 출석 실사용 플로어
-const FLOOR_OUTPUT = 50_000; // (agentic req≥20 OR output≥50k)
+const TOKEN_EARN_PER = 5; // 사용 보너스 ≥3 누적 N일당 토큰 1개
 
 // 복구 출석으로 인정되는 "실작업일" 판정 — 필러/핑 하루 배제(안티게이밍).
+// 도구를 가리지 않는다: 요청 수 또는 사용량 칸 중 하나.
 function meetsActivityFloor(d: GrowthDay): boolean {
-  return (d.requests ?? 0) >= FLOOR_REQUESTS || (d.output ?? 0) >= FLOOR_OUTPUT;
+  return (d.requests ?? 0) >= GP_RULES.floorRequests || volumeStep(d) >= GP_RULES.floorVolumeStep;
 }
 
 // 단계: [key, emoji, label, minGP]. 마지막이 상한(무한).
@@ -84,31 +99,41 @@ function streakMultiplier(days: number): number {
   return 1.0;
 }
 
-// 효율 보너스(하루, 상한 +5): 컨텍스트 수율 밴드(0..3) + 다양성(distinct툴−1, 상한2).
-// 수율 = output/cacheCreation("새 컨텍스트당 산출"). cacheCreation<1M은 신호 부족으로
-// 0(비penalty). 밴드 임계는 프로덕션 일별 분포 사분위 교정 — 스펙 참조.
-export function efficiencyBonus(day: GrowthDay): number {
-  const yieldBonus = yieldBand(day);
-  const diversityBonus = Math.min(2, Math.max(0, day.tools.length - 1)); // 0..2
-  return Math.min(5, yieldBonus + diversityBonus);
+function stepOf(value: number | undefined, steps: readonly number[]): number {
+  if (!(typeof value === "number" && Number.isFinite(value))) return 0;
+  let step = 0;
+  for (const min of steps) if (value >= min) step++;
+  return step;
 }
 
-// 새 컨텍스트당 산출 밴드. cacheCreation 플로어 1M 미만이면 신호 부족 → 0.
-function yieldBand(day: GrowthDay): number {
-  if (!(day.cacheCreation >= 1_000_000)) return 0; // <1M 또는 비유한 → 신호 부족
-  const y = day.output / day.cacheCreation;
-  if (y < 0.07) return 0;
-  if (y < 0.14) return 1;
-  if (y < 0.24) return 2;
-  return 3;
+// 사용량 칸(0~5): 환산 토큰 칸과 요청 수 칸 중 높은 쪽 하나. 둘을 더하지 않는다.
+export function volumeStep(day: GrowthDay): number {
+  return Math.max(stepOf(day.tokens, GP_RULES.tokenSteps), stepOf(day.requests, GP_RULES.requestSteps));
+}
+
+export function volumeBonus(day: GrowthDay): number {
+  return GP_RULES.volumeBonusByStep[volumeStep(day)] ?? 0;
+}
+
+// 다양성: 그날 센 모델 계열 수 − 1 (상한). 계열을 세는 기준은 호출측이 정한다.
+export function diversityBonus(day: GrowthDay): number {
+  const families = new Set(day.families ?? []).size;
+  return Math.min(GP_RULES.diversityBonusCap, Math.max(0, families - 1));
+}
+
+// 사용 보너스(하루, 상한 +5): 사용량 보너스 + 다양성 보너스.
+export function usageBonus(day: GrowthDay): number {
+  return Math.min(GP_RULES.dailyBonusCap, volumeBonus(day) + diversityBonus(day));
 }
 
 // 트레일링 7일에 미활동 1일까지 허용(굴러가는 창), 그 이상이면 스트릭 종료.
 // cursor 기준 [cursor, cursor+6] 창의 미스가 2 이상이면 끊긴다.
+// skip(선택): 아직 확인되지 않은 날 — 활동이 없어도 세지도, 결석으로 치지도 않는다.
 export function streakEndingAt(
   active: Set<string>,
   end: string,
   earliest: string,
+  skip?: ReadonlySet<string>,
 ): number {
   let streak = 0;
   const misses: string[] = [];
@@ -116,6 +141,8 @@ export function streakEndingAt(
   while (cursor >= earliest) {
     if (active.has(cursor)) {
       streak++;
+    } else if (skip?.has(cursor)) {
+      // 확인 중: 연속을 멈춰 둔다.
     } else {
       misses.push(cursor);
       const windowEnd = addDays(cursor, 6);
@@ -140,10 +167,12 @@ export type RevivalResult = {
 //   · C1 퀘스트: 그 외엔 유예창 내 자격 활동 2일로 복원(+품질일 있으면 보너스 GP)
 //   · C3 토큰: 위 실패 & 잔액>0이면 자동 1개 소모로 복원(최후 보루)
 // 치유된 결석일은 streak만 이어줄 뿐 GP는 소급하지 않는다(호출측이 GP 미가산).
+// unconfirmed(선택): 수집이 아직 확인되지 않은 날 — 결석으로 세지 않는다.
 export function computeRevival(
   eligible: GrowthDay[],
   today: string,
   holidays: ReadonlySet<string> = DEFAULT_HOLIDAYS,
+  unconfirmed?: ReadonlySet<string>,
 ): RevivalResult {
   const empty: RevivalResult = { healed: new Set(), bonusGp: 0, restoreTokens: 0, ember: null };
   if (eligible.length === 0) return empty;
@@ -152,14 +181,14 @@ export function computeRevival(
   const active = new Set(eligible.map((d) => d.date));
   const qualifies = new Set(eligible.filter(meetsActivityFloor).map((d) => d.date));
   const qualityDates = new Set(
-    eligible.filter((d) => efficiencyBonus(d) >= 3 || d.tools.length >= 2).map((d) => d.date),
+    eligible.filter((d) => usageBonus(d) >= 3 || d.tools.length >= 2).map((d) => d.date),
   );
 
   const healed = new Set<string>();
   let bonusGp = 0;
   let ember: Ember | null = null;
 
-  // 토큰: 효율보너스≥3 활동일 누적으로 적립, gap을 시간순으로 소모.
+  // 토큰: 사용 보너스≥3 활동일 누적으로 적립, gap을 시간순으로 소모.
   let cumHighEff = 0;
   let tokensConsumed = 0;
 
@@ -168,7 +197,7 @@ export function computeRevival(
       const prev = eligible[i - 1].date;
       const cur = eligible[i].date;
       const gapDays: string[] = [];
-      for (let c = addDays(prev, 1); c < cur; c = addDays(c, 1)) gapDays.push(c);
+      for (let c = addDays(prev, 1); c < cur; c = addDays(c, 1)) if (!unconfirmed?.has(c)) gapDays.push(c);
       // 결석 2일+ 만 끊김(단일 결석은 기존 규칙이 이미 브릿지).
       if (gapDays.length >= 2) {
         const breakDate = gapDays[gapDays.length - 1];
@@ -196,25 +225,25 @@ export function computeRevival(
           for (const g of gapDays) healed.add(g);
         } else if (graceEndsAt >= today) {
           // 유예창이 아직 열려있고 미복구 → 진행중 잔불(복귀했으나 needed 미달).
-          const length = streakEndingAt(new Set([...active, ...healed]), prev, earliest);
+          const length = streakEndingAt(new Set([...active, ...healed]), prev, earliest, unconfirmed);
           ember = { length, breakDate, graceEndsAt, kind: allRest ? "bridge" : "quest", needed, have };
         }
       }
     }
-    if (efficiencyBonus(eligible[i]) >= 3) cumHighEff++;
+    if (usageBonus(eligible[i]) >= 3) cumHighEff++;
   }
 
   // 꼬리 잔불: 마지막 활동일 이후 오늘까지 결석 2일+ 이고 유예창이 열려있으면,
   // 아직 복귀하지 않은 이탈자에게도 되살릴 불씨를 보여준다(윈백의 핵심 순간).
   const last = eligible[eligible.length - 1].date;
   const tail: string[] = [];
-  for (let c = addDays(last, 1); c <= today; c = addDays(c, 1)) tail.push(c);
+  for (let c = addDays(last, 1); c <= today; c = addDays(c, 1)) if (!unconfirmed?.has(c)) tail.push(c);
   if (tail.length >= 2) {
     const secondMiss = tail[1];
     const graceEndsAt = addBusinessDays(secondMiss, GRACE_BUSINESS_DAYS, holidays);
     if (graceEndsAt >= today) {
       const allRest = tail.every((d) => isRestDay(d, holidays));
-      const length = streakEndingAt(new Set([...active, ...healed]), last, earliest);
+      const length = streakEndingAt(new Set([...active, ...healed]), last, earliest, unconfirmed);
       ember = {
         length,
         breakDate: tail[tail.length - 1],
@@ -262,7 +291,7 @@ const MILESTONES = {
 const AXIS_LABEL: Record<string, (n: number) => string> = {
   streak: (n) => `${n}일 연속`,
   active_days: (n) => `누적 활동 ${n}일`,
-  efficiency: (n) => `효율 보너스 ${n}일`,
+  efficiency: (n) => `사용 보너스 ${n}일`,
   tools: (n) => `도구 ${n}종`,
 };
 
@@ -310,11 +339,14 @@ function collectMilestones(counts: Record<string, number>): {
 
 // today: 표시 기준 오늘(KST). teamEpoch: 팀 추적 시작일 YYYY-MM-DD — GP는 개인
 // 온보딩일이 아니라 이 팀 공통 기준일부터 누적한다(등록 시점 무관 공정).
+// unconfirmed(선택): 수집이 아직 확인되지 않은 날(예: 하루 늦게 오는 보고서를
+// 기다리는 날). 그날 기록이 없어도 연속을 끊지 않고 유휴로 세지 않으며 GP도 없다.
 export function computeGrowth(
   days: GrowthDay[],
   teamEpoch: string,
   today: string,
   holidays: ReadonlySet<string> = DEFAULT_HOLIDAYS,
+  unconfirmed?: ReadonlySet<string>,
 ): GrowthState {
   const DORMANT: GrowthState = {
     gp: 0, level: 0, stage: "dormant", stageEmoji: "🌰", stageLabel: "부화 전 씨앗",
@@ -333,18 +365,18 @@ export function computeGrowth(
   const earliest = eligible[0].date;
 
   // 윈백(불씨 되살리기): 치유된 결석일은 streak 연속으로 취급 → 복구 시 배수도 복원.
-  const revival = computeRevival(eligible, today, holidays);
+  const revival = computeRevival(eligible, today, holidays, unconfirmed);
   const activeOrHealed = revival.healed.size
     ? new Set([...active, ...revival.healed])
     : active;
 
-  // GP 누적: 각 활동일의 그 시점 스트릭 배수 × 10 + 효율보너스. 치유된 결석일 자체는
+  // GP 누적: 각 활동일의 그 시점 스트릭 배수 × 10 + 사용 보너스. 치유된 결석일 자체는
   // GP를 받지 않는다(eligible에 없음) — streak만 이어준다.
   let gp = 0;
   let highEffDays = 0;
   for (const d of eligible) {
-    const s = streakEndingAt(activeOrHealed, d.date, earliest);
-    const eff = efficiencyBonus(d);
+    const s = streakEndingAt(activeOrHealed, d.date, earliest, unconfirmed);
+    const eff = usageBonus(d);
     if (eff >= 3) highEffDays++;
     gp += Math.round(10 * streakMultiplier(s)) + eff;
   }
@@ -355,10 +387,10 @@ export function computeGrowth(
   const toNextLevel = 50 - (gp % 50);
   const toNextStage = nextStageMin === null ? null : nextStageMin - gp;
 
-  const streakDays = streakEndingAt(activeOrHealed, today, earliest);
+  const streakDays = streakEndingAt(activeOrHealed, today, earliest, unconfirmed);
   const latest = eligible[eligible.length - 1].date;
   let bestStreak = 0;
-  for (const d of eligible) bestStreak = Math.max(bestStreak, streakEndingAt(activeOrHealed, d.date, earliest));
+  for (const d of eligible) bestStreak = Math.max(bestStreak, streakEndingAt(activeOrHealed, d.date, earliest, unconfirmed));
 
   const distinctTools = new Set<string>();
   for (const d of eligible) for (const t of d.tools) distinctTools.add(t);
@@ -370,10 +402,13 @@ export function computeGrowth(
     tools: distinctTools.size,
   });
 
-  // 활력: 최신 활동일과 today 차이(일).
-  const idleDays = Math.round(
+  // 활력: 최신 활동일과 today 사이의 날 수. 확인 중인 날은 유휴로 세지 않는다.
+  let idleDays = Math.round(
     (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${latest}T00:00:00Z`)) / 86400000,
   );
+  if (unconfirmed?.size) {
+    for (let c = addDays(latest, 1); c <= today; c = addDays(c, 1)) if (unconfirmed.has(c)) idleDays--;
+  }
   const vitality = idleDays <= 0 ? "lively" : idleDays >= 3 ? "dozing" : "neutral";
 
   return {
@@ -383,7 +418,7 @@ export function computeGrowth(
     activeDays: eligible.length,
     streakDays, bestStreak,
     streakMultiplier: streakMultiplier(streakDays),
-    efficiencyBonusToday: efficiencyBonus(eligible[eligible.length - 1]),
+    efficiencyBonusToday: usageBonus(eligible[eligible.length - 1]), // 필드명은 API 호환용 유지
     vitality, idleDays: Math.max(0, idleDays),
     milestones: unlocked, nextMilestone: next,
     ember: revival.ember, restoreTokens: revival.restoreTokens,

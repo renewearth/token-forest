@@ -2,7 +2,7 @@
 import { ForestActivityButton } from "@/app/_components/ActivityCalendar";
 import { activityBadgeDescription, type ActivityCalendarData } from "@/lib/activity-calendar";
 import { connectDb, Member, VISIBLE_MEMBER } from "@/lib/db";
-import { getGrowthDays } from "@/lib/queries";
+import { getGrowthDays, getUnconfirmedGrowthDates } from "@/lib/queries";
 import { computeGrowth } from "@/lib/growth";
 import { todayKst, teamEpoch } from "@/lib/date";
 import { EmptyState } from "@/app/_components/ui";
@@ -58,13 +58,14 @@ export default async function ForestScene({ band, activity }: { band?: TimeBand;
   const members = await Member.find(VISIBLE_MEMBER, { name: 1, onboardedAt: 1 }).lean();
   if (members.length === 0) return <EmptyState message="등록된 구성원이 없습니다." />;
   const today = todayKst();
+  const unconfirmed = await getUnconfirmedGrowthDates(today);
   const trees = await Promise.all(
     members.map(async (m) => {
       const onboarded = m.onboardedAt
         ? new Date(m.onboardedAt).toISOString().slice(0, 10)
         : null;
       const days = await getGrowthDays(String(m._id), onboarded ?? "1970-01-01");
-      return { id: String(m._id), name: m.name, g: computeGrowth(days, teamEpoch(), today) };
+      return { id: String(m._id), name: m.name, g: computeGrowth(days, teamEpoch(), today, undefined, unconfirmed) };
     }),
   );
 
@@ -145,7 +146,7 @@ export default async function ForestScene({ band, activity }: { band?: TimeBand;
                   }}
                 />
               )}
-              {/* 수관 광채(효율) — 나무 뒤 */}
+              {/* 수관 광채(사용 보너스) — 나무 뒤 */}
               {aura.map((o, i) => (
                 <span
                   key={o.key}

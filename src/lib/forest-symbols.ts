@@ -20,7 +20,7 @@ export const STAGE_LEGEND: SymbolItem[] = [
 const AXIS_META: Record<string, { axisLabel: string; meaning: string }> = {
   streak: { axisLabel: "스트릭", meaning: "며칠 연달아 활동했는지 (주말·공휴일은 유지, 끊겨도 되살리기 가능)" },
   active_days: { axisLabel: "활동일", meaning: "팀 추적 시작 이후 활동한 날 누적" },
-  efficiency: { axisLabel: "효율", meaning: "컨텍스트 수율 높은 날 — 숲에선 나무 광채로 표시" },
+  efficiency: { axisLabel: "사용 보너스", meaning: "많이·다양하게 쓴 날(사용 보너스 3점 이상) — 숲에선 나무 광채로 표시" },
   tools: { axisLabel: "도구", meaning: "사용한 AI 도구 종류 수" },
 };
 const AXIS_ORDER = ["streak", "active_days", "efficiency", "tools"];
