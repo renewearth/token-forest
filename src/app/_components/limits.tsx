@@ -94,7 +94,7 @@ export function AccountLimits({
         const tier = rows[0]?.subscriptionType;
         return (
           <div key={login}>
-            <div className="mb-2 flex items-baseline gap-2 text-xs">
+            <div className="mb-2 flex flex-wrap items-baseline gap-2 text-xs">
               <span className="font-medium text-[var(--text-primary)]">{account}</span>
               {organization && (
                 <span className="text-[var(--text-secondary)]">
