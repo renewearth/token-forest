@@ -253,7 +253,29 @@ One row per `(tool, session, hour, model)`: `input` / `output` / `cacheRead` /
 `cacheCreation` tokens and request count. `tool` is `claude_code`, `codex`,
 `gemini`, `grok` or `opencode`; all are scanned in the same run. Your identity is taken from the ingest token —
 `externalId` is filled in by the server (your member email), so nothing
-personally identifying beyond model/token counts leaves your machine.
+personally identifying beyond model/token counts leaves your machine — with one
+addition for Claude Code, described next.
+
+## Which Claude organization a session ran under
+
+A member may use a company organization and a personal plan on the same
+machine, and a company spend report only covers the company organization. To
+tell them apart, Claude Code session rows can carry `accountOrg` (the Claude
+**organization id** — never the email or account name) and `accountEvidence`:
+
+- `transcript` — Remote Control sessions write the owning organization into the
+  session log; usage after such a line takes that organization.
+- `hook` — the installer's `SessionStart`/`SessionEnd` hook runs
+  `run.sh --hook`, which notes the session id and the organization of that
+  moment's login in `~/.token-forest/claude-accounts.jsonl` on the machine the
+  session ran on.
+
+There is no "whoever is logged in when the upload runs" guess: logs replicated
+from another machine or an account switched since would be tagged wrong. A row
+with neither evidence is sent untagged, and one bucket that saw two
+organizations is tagged `mixed`. `--dry-run` prints how many requests carry
+which tag. Sessions that ended before the hook was installed stay untagged
+unless their log has Remote Control lines.
 
 ## Auto-upload on session end (optional)
 

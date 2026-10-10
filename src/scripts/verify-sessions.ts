@@ -650,6 +650,42 @@ async function main() {
     (await sessionCoverage("ext-nobody", [{ tool: TOOL, date: D }])).size === 0,
   );
 
+  // Claude organization tag: stored with the bucket, upgraded only by stronger
+  // evidence, never part of the key (so it cannot split or double a session).
+  await UsageSession.deleteMany({});
+  const TEAM_ORG = "11111111-1111-4111-8111-111111111111";
+  const OWN_ORG = "22222222-2222-4222-8222-222222222222";
+  const acct = (over: Partial<UsageSessionRow> = {}) =>
+    row({ sessionId: "claude_code:ACC", inputTokens: 5, requests: 1, ...over });
+  const acctDocs = () => UsageSession.find({ externalId: "ext-acct" }).lean();
+  await upsertSessionRows("ext-acct", [acct({ machineId: A })]);
+  let ad = await acctDocs();
+  check("account: untagged row stores no organization", ad.length === 1 && (ad[0].accountOrg ?? "") === "" && (ad[0].accountEvidence ?? "") === "", ad);
+  await upsertSessionRows("ext-acct", [acct({ machineId: B, accountOrg: TEAM_ORG, accountEvidence: "hook" })]);
+  ad = await acctDocs();
+  check("account: a later tagged resend tags the same doc", ad.length === 1 && ad[0].accountOrg === TEAM_ORG && ad[0].accountEvidence === "hook" && ad[0].inputTokens === 5, ad);
+  await upsertSessionRows("ext-acct", [acct()]);
+  ad = await acctDocs();
+  check("account: an untagged resend keeps the tag", ad.length === 1 && ad[0].accountOrg === TEAM_ORG, ad);
+  await upsertSessionRows("ext-acct", [acct({ accountOrg: OWN_ORG, accountEvidence: "transcript" })]);
+  ad = await acctDocs();
+  check("account: transcript evidence replaces hook evidence", ad.length === 1 && ad[0].accountOrg === OWN_ORG && ad[0].accountEvidence === "transcript", ad);
+  await upsertSessionRows("ext-acct", [acct({ accountOrg: TEAM_ORG, accountEvidence: "hook" })]);
+  ad = await acctDocs();
+  check("account: hook evidence does not replace transcript evidence", ad[0].accountOrg === OWN_ORG && ad[0].accountEvidence === "transcript", ad);
+  await upsertSessionRows("ext-acct", [acct({ parserVersion: 3, inputTokens: 4 })]);
+  ad = await acctDocs();
+  check("account: a newer parser's untagged row keeps the tag", ad.length === 1 && ad[0].parserVersion === 3 && ad[0].inputTokens === 4 && ad[0].accountOrg === OWN_ORG, ad);
+  await upsertSessionRows("ext-acct", [acct({ parserVersion: 3, accountOrg: TEAM_ORG, accountEvidence: "transcript" })]);
+  ad = await acctDocs();
+  check("account: two organizations at the same strength become mixed", ad.length === 1 && ad[0].accountOrg === "mixed" && ad[0].accountEvidence === "transcript", ad);
+  await upsertSessionRows("ext-acct2", [
+    acct({ accountOrg: TEAM_ORG, accountEvidence: "hook" }),
+    acct({ accountOrg: OWN_ORG, accountEvidence: "hook" }),
+  ]);
+  const ad2 = await UsageSession.find({ externalId: "ext-acct2" }).lean();
+  check("account: same key twice in one request merges to one mixed doc", ad2.length === 1 && ad2[0].accountOrg === "mixed" && ad2[0].inputTokens === 5, ad2);
+
   await closeDb();
   console.log(`PASS=${pass} FAIL=${fail}`);
   if (fail === 0) console.log("ALL PASS");

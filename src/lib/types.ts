@@ -73,6 +73,12 @@ export const usageSessionRowSchema = z.object({
   hour: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}$/, "hour must be YYYY-MM-DDTHH"),
   model: z.string().max(200).default(""),
   provider: z.string().max(60).optional(),
+  // Claude organization the session ran under (an id, never an email) and how
+  // the uploader knew: "transcript" = written in the session log, "hook" =
+  // noted by the session hook on the machine it ran on. "mixed" = two
+  // organizations in one bucket. Absent = unknown.
+  accountOrg: z.string().min(1).max(64).optional(),
+  accountEvidence: z.enum(["transcript", "hook"]).optional(),
   inputTokens: sessionCount,
   outputTokens: sessionCount,
   cacheReadTokens: sessionCount,

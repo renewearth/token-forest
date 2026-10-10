@@ -43,6 +43,29 @@ const mergeEvidence = (a: Evidence, b: Evidence): Evidence =>
 const mergeDateBasis = (a: DateBasis | undefined, b: DateBasis | undefined): DateBasis =>
   (a ?? "KST") === (b ?? "KST") ? (a ?? b ?? "KST") : "미확인";
 
+// Which Claude organization a session bucket belongs to. Stronger evidence
+// replaces weaker (transcript > hook); two organizations at the same strength
+// become "mixed". Never part of the row key, so it cannot split a session.
+export type AccountEvidence = "transcript" | "hook";
+export type AccountTag = { accountOrg: string; accountEvidence: AccountEvidence } | null;
+const ACCOUNT_RANK: Record<AccountEvidence, number> = { hook: 1, transcript: 2 };
+export const MIXED_ORG = "mixed";
+export function accountTag(r: { accountOrg?: string | null; accountEvidence?: string | null }): AccountTag {
+  const accountOrg = (r.accountOrg ?? "").trim();
+  return accountOrg !== "" && (r.accountEvidence === "transcript" || r.accountEvidence === "hook")
+    ? { accountOrg, accountEvidence: r.accountEvidence }
+    : null;
+}
+export function mergeAccountTag(a: AccountTag, b: AccountTag): AccountTag {
+  if (!a) return b;
+  if (!b) return a;
+  const ra = ACCOUNT_RANK[a.accountEvidence];
+  const rb = ACCOUNT_RANK[b.accountEvidence];
+  if (ra !== rb) return ra > rb ? a : b;
+  return a.accountOrg === b.accountOrg ? a : { accountOrg: MIXED_ORG, accountEvidence: a.accountEvidence };
+}
+const accountFields = (t: AccountTag) => (t ? { accountOrg: t.accountOrg, accountEvidence: t.accountEvidence } : {});
+
 type Normalized = {
   tool: string;
   sessionId: string;
@@ -50,6 +73,7 @@ type Normalized = {
   date: string;
   model: string;
   provider: string | null; // null = not reported by this row
+  account: AccountTag;
   parserVersion: number;
   machineIds: string[];
   fieldEvidence: FieldEvidence;
@@ -87,6 +111,7 @@ function normalize(r: UsageSessionRow, canon: Canonicalize): Normalized {
     date: r.hour.slice(0, 10),
     model: canon(r.model),
     provider: provider === "" ? null : provider,
+    account: accountTag(r),
     parserVersion: r.parserVersion,
     machineIds: machineId === "" ? [] : [machineId],
     fieldEvidence: Object.fromEntries(VALUE_FIELDS.map((f) => [f, evidenceOf(r, f)])),
@@ -105,10 +130,12 @@ function normalize(r: UsageSessionRow, canon: Canonicalize): Normalized {
 function mergeInto(cur: Normalized, next: Normalized): Normalized {
   if (next.parserVersion < cur.parserVersion) return cur;
   const machineIds = [...new Set([...cur.machineIds, ...next.machineIds])];
-  if (next.parserVersion > cur.parserVersion) return { ...next, machineIds };
+  const account = mergeAccountTag(cur.account, next.account);
+  if (next.parserVersion > cur.parserVersion) return { ...next, machineIds, account };
   const merged: Normalized = {
     ...cur,
     machineIds,
+    account,
     provider: next.provider ?? cur.provider,
     fieldEvidence: { ...cur.fieldEvidence },
     dateBasis: mergeDateBasis(cur.dateBasis, next.dateBasis),
@@ -128,6 +155,8 @@ type StoredDoc = {
   date: string;
   model: string;
   provider: string;
+  accountOrg?: string;
+  accountEvidence?: string;
   parserVersion: number;
   machineIds: string[];
   fieldEvidence?: FieldEvidence;
@@ -139,11 +168,12 @@ type StoredDoc = {
 function mergeStored(cur: StoredDoc, next: StoredDoc): StoredDoc {
   const machineIds = [...new Set([...(cur.machineIds ?? []), ...(next.machineIds ?? [])])];
   const provider = cur.provider || next.provider || "";
-  if (next.parserVersion < cur.parserVersion) return { ...cur, machineIds, provider };
+  const account = accountFields(mergeAccountTag(accountTag(cur), accountTag(next)));
+  if (next.parserVersion < cur.parserVersion) return { ...cur, machineIds, provider, ...account };
   if (next.parserVersion > cur.parserVersion) {
-    return { ...next, _id: cur._id, machineIds, provider: next.provider || cur.provider || "" };
+    return { ...next, _id: cur._id, machineIds, provider: next.provider || cur.provider || "", ...account };
   }
-  const merged: StoredDoc = { ...cur, machineIds, provider, fieldEvidence: { ...cur.fieldEvidence }, dateBasis: mergeDateBasis(cur.dateBasis, next.dateBasis) };
+  const merged: StoredDoc = { ...cur, machineIds, provider, ...account, fieldEvidence: { ...cur.fieldEvidence }, dateBasis: mergeDateBasis(cur.dateBasis, next.dateBasis) };
   for (const f of VALUE_FIELDS) {
     merged[f] = maxNullable(cur[f], next[f]);
     merged.fieldEvidence![f] = mergeEvidence(evidenceOf(cur, f), evidenceOf(next, f));
@@ -197,6 +227,7 @@ async function mergeAliasDocs(
             model,
             parserVersion: merged.parserVersion,
             provider: merged.provider,
+            ...accountFields(accountTag(merged)),
             machineIds: merged.machineIds,
             fieldEvidence: merged.fieldEvidence,
             dateBasis: merged.dateBasis,
@@ -283,6 +314,8 @@ export async function upsertSessionRows(
           date: 1,
           model: 1,
           provider: 1,
+          accountOrg: 1,
+          accountEvidence: 1,
           parserVersion: 1,
           machineIds: 1,
           fieldEvidence: 1,
@@ -317,6 +350,7 @@ export async function upsertSessionRows(
     const values = Object.fromEntries(VALUE_FIELDS.map((f) => [f, r[f]]));
     const stored = existingByKey.get(sessionKey(r));
     const merged = stored ? mergeStored(stored, { ...r, _id: stored._id, provider: r.provider ?? "" }) : r;
+    const account = accountFields(mergeAccountTag(stored ? accountTag(stored) : null, r.account));
     const addToSet =
       r.machineIds.length > 0 ? { $addToSet: { machineIds: { $each: r.machineIds } } } : {};
     const memberId = memberByTool.get(r.tool) ?? null;
@@ -333,6 +367,7 @@ export async function upsertSessionRows(
               parserVersion: r.parserVersion,
               memberId,
               ...(r.provider !== null ? { provider: r.provider } : {}),
+              ...account,
             },
             ...addToSet,
           },
@@ -357,7 +392,7 @@ export async function upsertSessionRows(
         filter: prev === undefined ? filter : { ...filter, parserVersion: r.parserVersion },
         update: {
           $max: Object.fromEntries(VALUE_FIELDS.filter((f) => r[f] !== null).map((f) => [f, r[f]])),
-          $set: { memberId, fieldEvidence: merged.fieldEvidence, dateBasis: merged.dateBasis, ...(r.provider !== null ? { provider: r.provider } : {}) },
+          $set: { memberId, fieldEvidence: merged.fieldEvidence, dateBasis: merged.dateBasis, ...(r.provider !== null ? { provider: r.provider } : {}), ...account },
           $setOnInsert: {
             date: r.date,
             parserVersion: r.parserVersion,

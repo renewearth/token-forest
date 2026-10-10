@@ -156,11 +156,21 @@ cat > "$RUNNER" <<RUNNER_EOF
 # 범위를 정합니다 — 첫 실행·주 1회는 로컬 기록 전체, 그 외는 마지막 성공 전날부터.
 NODE_BIN='$NODE_BIN'
 CLI='$CLI'
+# 훅 호출(--hook): Claude Code 가 표준입력으로 주는 세션 정보를 받아 두고 바로 돌아갑니다.
+# 업로드는 뒤에서 실행되어 세션 시작·종료를 붙잡지 않습니다.
+if [ "\\$1" = "--hook" ]; then
+  TOKEN_FOREST_HOOK_INPUT="\\$(cat)"
+  export TOKEN_FOREST_HOOK_INPUT
+  "\\$NODE_BIN" "\\$CLI" "\\$@" >/dev/null 2>&1 &
+  exit 0
+fi
 exec "\\$NODE_BIN" "\\$CLI" "\\$@"
 RUNNER_EOF
 chmod +x "$RUNNER"
 
-# ─── Claude Code SessionEnd 훅 병합 (기존 훅 보존, 중복 방지) ────────────
+# ─── Claude Code 세션 시작·종료 훅 병합 (기존 훅 보존, 중복 방지) ────────
+# 두 훅 모두 run.sh --hook 을 부른다: 세션이 어느 Claude 조직 계정으로 돌았는지
+# (조직 ID만, 이메일 아님) 이 기기에 적어 두고, 종료 때는 업로드까지 한다.
 CLAUDE_DIR="$HOME/.claude"
 SETTINGS="$CLAUDE_DIR/settings.json"
 mkdir -p "$CLAUDE_DIR"
@@ -169,20 +179,30 @@ const fs = require("fs");
 const file = process.env.TM_FILE;
 const runner = process.env.TM_RUNNER;
 const marker = ".token-forest/run.sh";
-const command = "'" + runner + "' >/dev/null 2>&1 &";
+const command = "'" + runner + "' --hook";
 let data = {};
 try { data = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
 if (typeof data !== "object" || data === null || Array.isArray(data)) data = {};
 if (typeof data.hooks !== "object" || data.hooks === null || Array.isArray(data.hooks)) data.hooks = {};
-const list = Array.isArray(data.hooks.SessionEnd) ? data.hooks.SessionEnd : [];
 const results = [];
-if (JSON.stringify(list).includes(marker)) {
-  results.push("hook-exists");
-} else {
-  list.push({ hooks: [{ type: "command", command }] });
-  data.hooks.SessionEnd = list;
-  results.push("hook-added");
+// Our entry is the one whose command mentions run.sh. An older install's
+// command (no --hook) is rewritten in place; other hooks are left untouched.
+let changed = false;
+for (const event of ["SessionStart", "SessionEnd"]) {
+  const list = Array.isArray(data.hooks[event]) ? data.hooks[event] : [];
+  let found = false;
+  for (const group of list) {
+    for (const h of Array.isArray(group && group.hooks) ? group.hooks : []) {
+      if (h && typeof h.command === "string" && h.command.includes(marker)) {
+        found = true;
+        if (h.command !== command) { h.command = command; changed = true; }
+      }
+    }
+  }
+  if (!found) { list.push({ hooks: [{ type: "command", command }] }); changed = true; }
+  data.hooks[event] = list;
 }
+results.push(changed ? "hook-added" : "hook-exists");
 // Claude Code prunes session transcripts after ~30 days by default, which
 // permanently caps how far back usage can be re-collected. Extend retention
 // so history survives — but never override a value the user already chose.
@@ -197,8 +217,8 @@ process.stdout.write(results.join(","));
 NODE_EOF
 )"
 case "$HOOK_RESULT" in
-  *hook-added*) ok "Claude Code 세션 종료 훅을 등록했습니다: $SETTINGS" ;;
-  *) info "세션 종료 훅이 이미 등록되어 있습니다 (건너뜀)." ;;
+  *hook-added*) ok "Claude Code 세션 시작·종료 훅을 등록했습니다: $SETTINGS" ;;
+  *) info "세션 시작·종료 훅이 이미 등록되어 있습니다 (건너뜀)." ;;
 esac
 case "$HOOK_RESULT" in
   *retention-set*) ok "Claude Code 세션 기록 보존기간을 연장했습니다 (과거 사용량 소급을 위해)." ;;

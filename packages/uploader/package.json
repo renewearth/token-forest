@@ -1,6 +1,6 @@
 {
   "name": "@token-forest/uploader",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Push local Claude Code token usage to a token-forest server.",
   "type": "module",
   "private": false,

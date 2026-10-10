@@ -68,8 +68,8 @@ const REMOVE: { label: string; cmd: string }[] = [
     cmd: "crontab -l | grep -v '# token-forest-uploader' | crontab -",
   },
   {
-    label: "세션 종료 훅 제거",
-    cmd: "~/.claude/settings.json 을 열어 command 에 '.token-forest/run.sh' 가 들어간 SessionEnd 항목을 지웁니다.",
+    label: "세션 시작·종료 훅 제거",
+    cmd: "~/.claude/settings.json 을 열어 command 에 '.token-forest/run.sh' 가 들어간 SessionStart·SessionEnd 항목을 지웁니다.",
   },
   {
     label: "프로그램·설정 삭제",
@@ -94,7 +94,8 @@ const TROUBLESHOOT: { q: string; a: React.ReactNode }[] = [
     a: (
       <>
         <code className="rounded bg-black/5 px-1 dark:bg-white/10">~/.claude/settings.json</code>{" "}
-        의 <code className="rounded bg-black/5 px-1 dark:bg-white/10">hooks.SessionEnd</code> 에{" "}
+        의 <code className="rounded bg-black/5 px-1 dark:bg-white/10">hooks.SessionStart</code>·
+        <code className="rounded bg-black/5 px-1 dark:bg-white/10">hooks.SessionEnd</code> 에{" "}
         <code className="rounded bg-black/5 px-1 dark:bg-white/10">.token-forest/run.sh</code> 를
         호출하는 항목이 있으면 정상입니다. 직접 확인하려면{" "}
         <code className="rounded bg-black/5 px-1 dark:bg-white/10">~/.token-forest/run.sh</code> 를

@@ -115,6 +115,10 @@ export interface UsageSessionDoc {
   date: string; // hour.slice(0, 10)
   model: string;
   provider: string; // "" when the tool reports none
+  // Claude organization id the bucket ran under ("" = unknown, "mixed" = two)
+  // and the evidence for it ("transcript" | "hook" | ""). See sessions.ts.
+  accountOrg?: string;
+  accountEvidence?: string;
   inputTokens: number | null;
   outputTokens: number | null;
   cacheReadTokens: number | null;
@@ -349,6 +353,8 @@ const usageSessionSchema = new Schema<UsageSessionDoc>(
     date: { type: String, required: true },
     model: { type: String, default: "" },
     provider: { type: String, default: "" },
+    accountOrg: { type: String, default: "" },
+    accountEvidence: { type: String, enum: ["", "transcript", "hook"], default: "" },
     inputTokens: { type: Number, default: null },
     outputTokens: { type: Number, default: null },
     cacheReadTokens: { type: Number, default: null },
