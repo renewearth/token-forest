@@ -39,23 +39,34 @@ export function parseClaudeSpendCsv(csv: string, context: ClaudeReportContext): 
     if (!headers.includes(name)) throw new Error(`필수 열이 없습니다: ${name}`);
   }
   if (!headers.includes("email") && !headers.includes("account_uuid")) throw new Error("사용자 이메일 또는 account_uuid 열이 필요합니다");
-  const keys = new Set<string>();
-  return records.map((cells, index) => {
+  // The report splits one user·product·model into a line per Slack/Teams
+  // channel (Claude Tag). Those lines are summed into one row; the same channel
+  // twice is still a duplicate. Channel ids themselves are not stored.
+  const merged = new Map<string, { row: UsageReportRow; channels: Set<string> }>();
+  records.forEach((cells, index) => {
     if (cells.length !== headers.length) throw new Error(`${index + 2}행: 열 개수가 다릅니다`);
     const data = Object.fromEntries(headers.map((h, i) => [h, cells[i]]));
     const metrics: UsageReportRow["metrics"] = {};
-    for (const [column, metric] of Object.entries({ total_requests: "reported_requests", total_prompt_tokens: "prompt_tokens", total_completion_tokens: "completion_tokens", total_net_spend_usd: "net_cost_usd" } as const)) {
+    // Both cache-write columns feed one metric; the rest map one to one.
+    for (const [column, metric] of Object.entries({ total_requests: "reported_requests", total_prompt_tokens: "prompt_tokens", total_completion_tokens: "completion_tokens", total_net_spend_usd: "net_cost_usd",
+      total_uncached_input_tokens: "uncached_input_tokens", total_cache_read_tokens: "cache_read_tokens", total_cache_write_5m_tokens: "cache_write_tokens", total_cache_write_1h_tokens: "cache_write_tokens" } as const)) {
       const value = data[column];
       if (value === undefined || value === "") continue;
       if (!/^\d+(?:\.\d+)?$/.test(value)) throw new Error(`${index + 2}행: ${column} 숫자 형식 오류`);
-      metrics[metric] = Number(value);
+      metrics[metric] = (metrics[metric] ?? 0) + Number(value);
     }
     const externalId = data.email?.toLowerCase() || data.account_uuid;
     const row = usageReportRowSchema.parse({ ...context, sourceId: "claude-spend-csv", externalId,
       product: data.product, model: data.model, granularity: "period", metrics });
     const key = JSON.stringify([row.product, row.model, row.externalId]);
-    if (keys.has(key)) throw new Error(`${index + 2}행: 사용자·제품·모델 범위가 중복되었습니다`);
-    keys.add(key);
-    return row;
+    const channel = JSON.stringify([data.slack_channel_id ?? "", data.teams_channel_id ?? ""]);
+    const group = merged.get(key);
+    if (!group) { merged.set(key, { row, channels: new Set([channel]) }); return; }
+    if (group.channels.has(channel)) throw new Error(`${index + 2}행: 사용자·제품·모델 범위가 중복되었습니다`);
+    group.channels.add(channel);
+    for (const [metric, value] of Object.entries(row.metrics) as [keyof UsageReportRow["metrics"], number][]) {
+      group.row.metrics[metric] = (group.row.metrics[metric] ?? 0) + value;
+    }
   });
+  return [...merged.values()].map(group => usageReportRowSchema.parse(group.row));
 }
