@@ -155,6 +155,23 @@ async function main() {
   check("installer registers both session hooks", script.includes('["SessionStart", "SessionEnd"]') && script.includes(`"' --hook"`));
   check("installer wrapper hands the hook payload to the CLI", script.includes('TOKEN_FOREST_HOOK_INPUT="\\$(cat)"'));
 
+  // macOS bash 3.2 pairs single quotes inside $( <<'HEREDOC' ... ), so an odd
+  // count there is a syntax error for every Mac install. Check the count, and
+  // parse the whole script with the system bash (3.2 on macOS).
+  const subStart = script.indexOf('HOOK_RESULT="$(');
+  const subEnd = script.indexOf("\nNODE_EOF", subStart);
+  const quotes = (script.slice(subStart, subEnd).match(/'/g) ?? []).length;
+  check("the hook merge block has an even number of single quotes", subStart > 0 && subEnd > subStart && quotes % 2 === 0, quotes);
+  const whole = path.join(root, "install.sh");
+  writeFileSync(whole, script);
+  let syntax = "";
+  try {
+    execFileSync("/bin/bash", ["-n", whole], { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+  } catch (err) {
+    syntax = String((err as { stderr?: unknown }).stderr ?? err);
+  }
+  check("the rendered installer parses with the system bash", syntax === "", syntax);
+
   // Run the generated wrapper for real: a hook call must return at once, keep
   // the payload from stdin and let the CLI record it in the background.
   const runner = path.join(root, "run.sh");

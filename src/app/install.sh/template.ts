@@ -185,8 +185,11 @@ try { data = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
 if (typeof data !== "object" || data === null || Array.isArray(data)) data = {};
 if (typeof data.hooks !== "object" || data.hooks === null || Array.isArray(data.hooks)) data.hooks = {};
 const results = [];
-// Our entry is the one whose command mentions run.sh. An older install's
-// command (no --hook) is rewritten in place; other hooks are left untouched.
+// Our entry is the one whose command mentions run.sh. A command written by an
+// older installer (no --hook) is rewritten in place; other hooks are untouched.
+// NOTE: this heredoc sits inside $( ... ). macOS ships bash 3.2, which still
+// pairs single quotes there, so the quote count in this block must stay even
+// (no apostrophes in comments).
 let changed = false;
 for (const event of ["SessionStart", "SessionEnd"]) {
   const list = Array.isArray(data.hooks[event]) ? data.hooks[event] : [];
