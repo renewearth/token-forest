@@ -112,6 +112,7 @@ function pure() {
   check("no report means nothing is unconfirmed", () => assert.equal(unconfirmedAfter(null, "2026-10-11").size, 0));
   check("days after the latest report are unconfirmed", () => assert.deepEqual([...unconfirmedAfter("2026-10-09", "2026-10-11")], ["2026-10-10", "2026-10-11"]));
   check("a report through today leaves nothing unconfirmed", () => assert.equal(unconfirmedAfter("2026-10-11", "2026-10-11").size, 0));
+  check("only the first three days after the latest report stay unconfirmed", () => assert.deepEqual([...unconfirmedAfter("2026-10-01", "2026-10-11")], ["2026-10-02", "2026-10-03", "2026-10-04"]));
 }
 
 const ACCOUNT = "synthetic-gp-org";

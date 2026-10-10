@@ -241,10 +241,16 @@ export async function loadGrowthDays(memberId: string, since: string): Promise<G
 // stored day up to `today`. The report arrives a day late, so a missing record
 // there is "not confirmed", not "absent". No report at all → nothing is
 // unconfirmed (behaviour as before reports existed).
+//
+// Capped: only the first GP_UNCONFIRMED_MAX_DAYS days after the latest report
+// are held open. If report uploads stop, later days fall back to the ordinary
+// rule instead of freezing every streak and idle state forever.
+export const GP_UNCONFIRMED_MAX_DAYS = 3;
 export function unconfirmedAfter(latestReportDate: string | null, today: string): Set<string> {
   const dates = new Set<string>();
   if (!latestReportDate) return dates;
-  for (let d = addDays(latestReportDate, 1); d <= today; d = addDays(d, 1)) dates.add(d);
+  const last = addDays(latestReportDate, GP_UNCONFIRMED_MAX_DAYS);
+  for (let d = addDays(latestReportDate, 1); d <= today && d <= last; d = addDays(d, 1)) dates.add(d);
   return dates;
 }
 
