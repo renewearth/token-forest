@@ -1,22 +1,18 @@
-import { computeGrowth, efficiencyBonus, streakEndingAt } from "../lib/growth";
+import { computeGrowth, diversityBonus, GP_RULES, streakEndingAt, usageBonus, volumeBonus, volumeStep } from "../lib/growth";
 import type { GrowthDay } from "../lib/growth";
-import { EFFICIENCY_TOOLS } from "../lib/queries";
 
 function assert(cond: boolean, msg: string) {
   if (!cond) { console.error("FAIL:", msg); process.exit(1); }
   console.log("ok:", msg);
 }
 
-// Caleb 실데이터 재현: 활동 07-18/19/20 (claude_code+openai). output/cacheCreation은
-// 수율 0.30(밴드3)으로 설정 → 효율보너스 밴드3+다양성1 = 4 (기존 총점 유지).
+// 활동 07-18/19/20. 사용량 4칸(+3) + 모델 계열 2가지(+1) = 사용 보너스 4.
 const days: GrowthDay[] = [
-  { date: "2026-07-18", tools: ["claude_code", "openai"], input: 72046, cacheRead: 841908013, output: 3_000_000, cacheCreation: 10_000_000 },
-  { date: "2026-07-19", tools: ["claude_code", "openai"], input: 43580, cacheRead: 894918067, output: 3_000_000, cacheCreation: 10_000_000 },
-  { date: "2026-07-20", tools: ["claude_code", "openai"], input: 23724, cacheRead: 360484718, output: 3_000_000, cacheCreation: 10_000_000 },
+  { date: "2026-07-18", tools: ["claude_code", "codex"], tokens: 4_000_000, requests: 300, families: ["opus", "gpt"] },
+  { date: "2026-07-19", tools: ["claude_code", "codex"], tokens: 4_000_000, requests: 300, families: ["opus", "gpt"] },
+  { date: "2026-07-20", tools: ["claude_code", "codex"], tokens: 4_000_000, requests: 300, families: ["opus", "gpt"] },
 ];
-
-// 효율보너스: 수율 0.30(밴드3) + 2툴(+1) = +4.
-assert(efficiencyBonus(days[0]) === 4, "효율보너스 07-18 = 4 (밴드3+다양성1)");
+assert(usageBonus(days[0]) === 4, "사용 보너스 07-18 = 4 (사용량 3 + 다양성 1)");
 
 // GP: (10×1.0+4)+(10×1.0+4)+(round(10×1.2)+4)=14+14+16 = 44.
 const g = computeGrowth(days, "2026-07-18", "2026-07-23");
@@ -28,6 +24,7 @@ assert(g.bestStreak === 3, `bestStreak=3 (got ${g.bestStreak})`);
 assert(g.streakDays === 0, `현재 스트릭=0, 3일 유휴 (got ${g.streakDays})`);
 assert(g.vitality === "dozing" && g.idleDays === 3, "졸음 · 유휴 3일");
 assert(g.milestones.includes("streak_3") && g.milestones.includes("tools_2"), "언락 🌸·🍄");
+assert(g.efficiencyBonusToday === 4, "efficiencyBonusToday 필드는 최신 활동일의 사용 보너스");
 
 // 팀 epoch가 모든 활동일보다 이후 → eligible 없음 → 휴면.
 const d0 = computeGrowth(days, "2027-01-01", "2027-01-01");
@@ -43,39 +40,74 @@ assert(streakEndingAt(gap, "2026-07-13", "2026-07-10") === 3, "단일 갭 브릿
 const gap2 = new Set(["2026-07-10", "2026-07-13"]); // 11,12 연속 쉼
 assert(streakEndingAt(gap2, "2026-07-13", "2026-07-10") === 1, "2연속 갭 → 1");
 
-// 코덱스-only 활동일도 active day·툴 다양성에 반영된다(소비자측: computeGrowth는
-// 툴로 필터하지 않는다 — getGrowthDays가 codex 행을 넘겨주면 그대로 성장에 반영).
-const codexDays: GrowthDay[] = [
-  { date: "2026-07-18", tools: ["claude_code"], input: 1000, cacheRead: 9000, output: 100, cacheCreation: 1000 },
-  { date: "2026-07-19", tools: ["codex"], input: 500, cacheRead: 4500, output: 300_000, cacheCreation: 1_000_000 },
-];
-const cg = computeGrowth(codexDays, "2026-07-18", "2026-07-19");
-assert(cg.activeDays === 2, `codex-only 날 포함 활동 2일 (got ${cg.activeDays})`);
-assert(
-  efficiencyBonus(codexDays[1]) === 3,
-  `codex 수율 0.30(밴드3) 단일툴 효율보너스 =3 (got ${efficiencyBonus(codexDays[1])})`,
-);
-assert(
-  EFFICIENCY_TOOLS.includes("codex") && EFFICIENCY_TOOLS.includes("claude_code"),
-  "효율 재료 툴셋에 codex+claude_code 포함",
-);
-
-// --- 수율 밴드(yieldBand) 경계·플로어·cap ---
-const one = (output: number, cacheCreation: number): GrowthDay => ({
-  date: "2026-07-18", tools: ["claude_code"], input: 0, cacheRead: 0, output, cacheCreation,
+// --- 사용량 칸: 토큰 경계 ---
+const one = (o: Partial<GrowthDay>): GrowthDay => ({ date: "2026-07-18", tools: ["x"], tokens: 0, ...o });
+const T = GP_RULES.tokenSteps, R = GP_RULES.requestSteps;
+assert(JSON.stringify(T) === "[50000,200000,1000000,4000000,15000000]", "토큰 계단 5만/20만/100만/400만/1,500만");
+assert(JSON.stringify(R) === "[10,50,250,850,2000]", "요청 계단 10/50/250/850/2,000");
+assert(volumeStep(one({ tokens: 0 })) === 0 && volumeStep(one({ tokens: T[0] - 1 })) === 0, "토큰 5만 미만 → 0칸");
+T.forEach((min, i) => {
+  assert(volumeStep(one({ tokens: min })) === i + 1, `토큰 ${min} → ${i + 1}칸`);
+  assert(volumeStep(one({ tokens: min - 1 })) === i, `토큰 ${min - 1} → ${i}칸`);
 });
-assert(efficiencyBonus(one(60_000, 1_000_000)) === 0, "수율 0.06 < 0.07 → 밴드0");
-assert(efficiencyBonus(one(70_000, 1_000_000)) === 1, "수율 0.07 → 밴드1");
-assert(efficiencyBonus(one(139_000, 1_000_000)) === 1, "수율 0.139 < 0.14 → 밴드1");
-assert(efficiencyBonus(one(140_000, 1_000_000)) === 2, "수율 0.14 → 밴드2");
-assert(efficiencyBonus(one(239_000, 1_000_000)) === 2, "수율 0.239 < 0.24 → 밴드2");
-assert(efficiencyBonus(one(240_000, 1_000_000)) === 3, "수율 0.24 → 밴드3");
-assert(efficiencyBonus(one(5_000_000, 999_999)) === 0, "cacheCreation<1M 플로어 → 0");
-assert(efficiencyBonus(one(5_000_000, Number.NaN)) === 0, "cacheCreation NaN → 플로어 → 0");
-assert(efficiencyBonus(one(0, 5_000_000)) === 0, "output 0 → 수율 0 → 밴드0");
+// --- 사용량 칸: 요청 수 경계 ---
+assert(volumeStep(one({ requests: R[0] - 1 })) === 0, "요청 9 → 0칸");
+R.forEach((min, i) => {
+  assert(volumeStep(one({ requests: min })) === i + 1, `요청 ${min} → ${i + 1}칸`);
+  assert(volumeStep(one({ requests: min - 1 })) === i, `요청 ${min - 1} → ${i}칸`);
+});
+// --- 둘 중 높은 쪽(더하지 않음) ---
+assert(volumeStep(one({ tokens: 60_000, requests: 900 })) === 4, "토큰 1칸·요청 4칸 → 4칸");
+assert(volumeStep(one({ tokens: 20_000_000, requests: 3 })) === 5, "토큰 5칸·요청 0칸 → 5칸");
+assert(volumeStep(one({ tokens: 1_000_000, requests: 250 })) === 3, "같은 칸 둘 → 그 칸(합산 아님)");
+assert(volumeStep(one({ tokens: Number.NaN, requests: undefined })) === 0, "비정상 값 → 0칸");
+// --- 사용량 보너스 표: 0,0,1,2,3,4 ---
 assert(
-  efficiencyBonus({ date: "x", tools: ["claude_code", "codex", "cursor"], input: 0, cacheRead: 0, output: 240_000, cacheCreation: 1_000_000 }) === 5,
-  "밴드3 + 다양성2 = cap 5",
+  JSON.stringify([0, T[0], T[1], T[2], T[3], T[4]].map((t) => volumeBonus(one({ tokens: t })))) === "[0,0,1,2,3,4]",
+  "칸 0~5 → 사용량 보너스 0,0,1,2,3,4",
 );
+// --- 다양성: 센 계열 수 − 1, 상한 2 ---
+assert(diversityBonus(one({})) === 0, "계열 정보 없음 → 0");
+assert(diversityBonus(one({ families: ["opus"] })) === 0, "계열 1 → 0");
+assert(diversityBonus(one({ families: ["opus", "gpt"] })) === 1, "계열 2 → 1");
+assert(diversityBonus(one({ families: ["opus", "gpt", "gemini"] })) === 2, "계열 3 → 2");
+assert(diversityBonus(one({ families: ["opus", "gpt", "gemini", "grok"] })) === 2, "계열 4 → 상한 2");
+assert(diversityBonus(one({ families: ["opus", "opus"] })) === 0, "같은 계열 중복은 한 번");
+assert(diversityBonus(one({ tools: ["a", "b", "c"] })) === 0, "도구 수는 다양성 보너스에 쓰지 않음");
+// --- 합계 상한 5 ---
+assert(usageBonus(one({ tokens: T[4], families: ["opus", "gpt", "gemini"] })) === 5, "사용량 4 + 다양성 2 = 상한 5");
+assert(usageBonus(one({ tokens: T[3], families: ["opus", "gpt", "gemini"] })) === 5, "사용량 3 + 다양성 2 = 5");
+assert(usageBonus(one({ tokens: 10, requests: 1 })) === 0, "아주 적은 사용 → 보너스 0 (기본 10 GP만)");
+
+// --- Claude Code 없이 보고서로만 잡히는 사람도 GP·연속 기록을 받는다 ---
+const reportOnly: GrowthDay[] = ["2026-09-01", "2026-09-02", "2026-09-03"].map((date) => ({
+  date, tools: ["claude_cowork"], tokens: 300_000, requests: 60, families: ["sonnet"],
+}));
+const ro = computeGrowth(reportOnly, "2026-09-01", "2026-09-03");
+assert(ro.activeDays === 3 && ro.streakDays === 3, `보고서만으로 활동 3일·연속 3일 (got ${ro.activeDays}/${ro.streakDays})`);
+assert(ro.gp === 11 + 11 + 13, `2칸(+1) × 3일: 11+11+13 = 35 GP (got ${ro.gp})`);
+
+// --- 확인 중인 날: 연속을 끊지 않고, 유휴로 세지 않고, GP도 주지 않는다 ---
+const base: GrowthDay[] = ["2026-09-01", "2026-09-02", "2026-09-03"].map((date) => ({ date, tools: ["claude_code"], tokens: 60_000, requests: 30 }));
+const confirmedGap = computeGrowth(base, "2026-09-01", "2026-09-06");
+assert(confirmedGap.streakDays === 0 && confirmedGap.idleDays === 3, `확인된 결석 3일 → 연속 0·유휴 3 (got ${confirmedGap.streakDays}/${confirmedGap.idleDays})`);
+const pending = new Set(["2026-09-04", "2026-09-05", "2026-09-06"]);
+const frozen = computeGrowth(base, "2026-09-01", "2026-09-06", undefined, pending);
+assert(frozen.streakDays === 3, `확인 중 3일 → 연속 3 유지 (got ${frozen.streakDays})`);
+assert(frozen.idleDays === 0 && frozen.vitality === "lively", `확인 중은 유휴 아님 (got ${frozen.idleDays}/${frozen.vitality})`);
+assert(frozen.gp === confirmedGap.gp && frozen.activeDays === 3, "확인 중인 날은 GP·활동일을 만들지 않음");
+assert(frozen.ember === null, "확인 중인 꼬리에는 잔불을 띄우지 않음");
+// 확인 중이던 날에 기록이 들어오면 평소대로 센다.
+const arrived = computeGrowth([...base, { date: "2026-09-04", tools: ["claude_chat"], tokens: 60_000, requests: 30 }], "2026-09-01", "2026-09-06", undefined, pending);
+assert(arrived.streakDays === 4 && arrived.activeDays === 4, `확인 중인 날에 기록 도착 → 연속 4 (got ${arrived.streakDays})`);
+// 확인된 2일 결석은 그대로 끊긴다(확인 중 표시가 다른 날을 덮지 않음).
+const broken = computeGrowth([...base, { date: "2026-09-10", tools: ["claude_code"], tokens: 60_000, requests: 30 }], "2026-09-01", "2026-09-10", undefined, new Set(["2026-09-11"]));
+assert(broken.streakDays === 1 && broken.bestStreak === 3, `확인된 결석 6일 → 연속 1 (got ${broken.streakDays})`);
+// 확인 중인 날은 연속 길이에 더해지지 않는다(멈춰 둘 뿐).
+assert(streakEndingAt(new Set(["2026-09-01", "2026-09-03"]), "2026-09-03", "2026-09-01", new Set(["2026-09-02"])) === 2, "확인 중인 날은 세지 않음");
+
+// --- 결정성 ---
+assert(JSON.stringify(computeGrowth(days, "2026-07-18", "2026-07-23")) === JSON.stringify(g), "같은 입력 → 같은 결과");
+assert(JSON.stringify(computeGrowth([...days].reverse(), "2026-07-18", "2026-07-23")) === JSON.stringify(g), "입력 순서 무관");
 
 console.log("ALL PASS");

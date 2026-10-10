@@ -155,8 +155,10 @@ async function main() {
   const ids = members.map((m) => String(m._id));
   const fixedBefore = await fixedSnapshot(ids[0]);
   near("legacy omitted period total stays input+output", (await getPeriodTotals(RANGE)).totalTokens, 2320);
-  near("growth input fact", fixedBefore.growth.reduce((n, r) => n + r.input, 0), 200);
-  near("growth cache fact", fixedBefore.growth.reduce((n, r) => n + r.cacheRead, 0), 2000);
+  // Growth days now cover every tool (4 session facts for member 0, 1 request
+  // each, on 2 dates) and carry ladder tokens instead of raw agentic sums.
+  near("growth request fact (all tools)", fixedBefore.growth.reduce((n, r) => n + (r.requests ?? 0), 0), 4);
+  near("growth active days", fixedBefore.growth.length, 2);
 
   const bases: TokenBasis[] = ["all", "no-cache-read", "output", "legacy"];
   const units: Unit[] = ["raw", "usd", "ref"];

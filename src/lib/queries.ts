@@ -30,6 +30,7 @@ import { loadPriceTable } from "@/lib/price-table";
 import { type Unit, type UsageSelection } from "@/lib/units";
 import { projectUsage, groupUsage, type DisplayRow, type UsageFact } from "@/lib/usage-display";
 import type { GrowthDay } from "@/lib/growth";
+import { loadGrowthDays, loadUnconfirmedGrowthDates } from "@/lib/growth-days";
 import { EMPTY_SUMS, addSums } from "@/lib/scorecard";
 import type { ScoreSums } from "@/lib/scorecard";
 import { DERIVED_MACHINE_ID } from "@/lib/sessions";
@@ -1503,60 +1504,18 @@ function pivot(
   return { data, tools };
 }
 
-// 멤버의 날짜별 활동 재료. distinct 툴 목록 + 에이전틱 툴(claude_code·codex)
-// input/cacheRead/output/cacheCreation 합. since(포함) 이후 날짜만. 성장엔진 입력용.
-// 효율보너스(수율)에 기여하는 에이전틱 툴. 활동일·스트릭·다양성은 전 툴 기준.
-export const EFFICIENCY_TOOLS = ["claude_code", "codex"];
-
+// 멤버의 날짜별 성장 재료(모든 수집 도구 + Claude 일별 지출 보고서 합산).
+// since(포함) 이후 날짜만. 합산 규칙은 src/lib/growth-days.ts.
 export async function getGrowthDays(
   memberId: string,
   since: string,
 ): Promise<GrowthDay[]> {
-  await connectDb();
-  const rows = await UsageDaily.aggregate([
-    { $match: { memberId: oid(memberId), date: { $gte: since } } },
-    {
-      $group: {
-        _id: "$date",
-        tools: { $addToSet: "$tool" },
-        input: {
-          $sum: {
-            $cond: [{ $in: ["$tool", EFFICIENCY_TOOLS] }, { $ifNull: ["$inputTokens", 0] }, 0],
-          },
-        },
-        cacheRead: {
-          $sum: {
-            $cond: [{ $in: ["$tool", EFFICIENCY_TOOLS] }, { $ifNull: ["$cacheReadTokens", 0] }, 0],
-          },
-        },
-        output: {
-          $sum: {
-            $cond: [{ $in: ["$tool", EFFICIENCY_TOOLS] }, { $ifNull: ["$outputTokens", 0] }, 0],
-          },
-        },
-        cacheCreation: {
-          $sum: {
-            $cond: [{ $in: ["$tool", EFFICIENCY_TOOLS] }, { $ifNull: ["$cacheCreationTokens", 0] }, 0],
-          },
-        },
-        requests: {
-          $sum: {
-            $cond: [{ $in: ["$tool", EFFICIENCY_TOOLS] }, { $ifNull: ["$requests", 0] }, 0],
-          },
-        },
-      },
-    },
-    { $sort: { _id: 1 } },
-  ]);
-  return rows.map((r) => ({
-    date: r._id as string,
-    tools: (r.tools as string[]) ?? [],
-    input: r.input as number,
-    cacheRead: r.cacheRead as number,
-    output: r.output as number,
-    cacheCreation: r.cacheCreation as number,
-    requests: r.requests as number,
-  }));
+  return loadGrowthDays(memberId, since);
+}
+
+// 일별 보고서가 아직 덮지 못한 날(확인 중) — computeGrowth 의 unconfirmed 인자.
+export async function getUnconfirmedGrowthDates(today: string): Promise<Set<string>> {
+  return loadUnconfirmedGrowthDates(today);
 }
 
 // ---- scorecard (스펙: 2026-07-26-ai-scorecard-design.md) ----
