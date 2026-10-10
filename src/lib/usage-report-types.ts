@@ -4,7 +4,9 @@ export const reportDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(
   value => !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value,
   "유효한 날짜가 필요합니다",
 );
-export const REPORT_METRICS = ["prompt_tokens", "completion_tokens", "reported_requests", "ai_credits", "premium_requests", "active_uses", "net_cost_usd"] as const;
+// uncached_input/cache_read/cache_write break prompt_tokens down when the
+// source reports it; they are stored beside prompt_tokens, never added to it.
+export const REPORT_METRICS = ["prompt_tokens", "completion_tokens", "uncached_input_tokens", "cache_read_tokens", "cache_write_tokens", "reported_requests", "ai_credits", "premium_requests", "active_uses", "net_cost_usd"] as const;
 export type ReportMetric = typeof REPORT_METRICS[number];
 const metricShape = Object.fromEntries(REPORT_METRICS.map(key => [key, z.number().finite().nonnegative().optional()])) as Record<ReportMetric, z.ZodOptional<z.ZodNumber>>;
 export const usageReportRowSchema = z.object({
@@ -23,7 +25,7 @@ export const usageReportRowSchema = z.object({
   if (row.periodEnd < row.periodStart || (row.granularity === "day" && row.periodStart !== row.periodEnd)) {
     ctx.addIssue({ code: "custom", path: ["periodEnd"], message: "보고서 기간을 확인하세요" });
   }
-  for (const metric of ["prompt_tokens", "completion_tokens", "reported_requests", "active_uses"] as const) {
+  for (const metric of ["prompt_tokens", "completion_tokens", "uncached_input_tokens", "cache_read_tokens", "cache_write_tokens", "reported_requests", "active_uses"] as const) {
     if (row.metrics[metric] !== undefined && !Number.isSafeInteger(row.metrics[metric])) ctx.addIssue({ code: "custom", path: ["metrics", metric], message: "0 이상의 안전한 정수여야 합니다" });
   }
 });
@@ -57,5 +59,6 @@ export function reportSnapshotFor(row: UsageReportRow): UsageReportSnapshot {
 
 export const REPORT_METRIC_LABELS: Record<ReportMetric, string> = {
   prompt_tokens: "입력 토큰 (보고서 기준)", completion_tokens: "출력 토큰", reported_requests: "보고된 요청 건수",
+  uncached_input_tokens: "캐시 아닌 입력 토큰", cache_read_tokens: "캐시 읽기 토큰", cache_write_tokens: "캐시 쓰기 토큰",
   ai_credits: "AI 크레딧", premium_requests: "프리미엄 요청 과금량", active_uses: "능동 기능 사용 건수", net_cost_usd: "순비용 (USD)",
 };
