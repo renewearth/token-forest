@@ -26,6 +26,7 @@ import { acquireRunLock } from "./lib/run-lock.mjs";
 import { loadAttribution, saveAttribution } from "./lib/claude-attr.mjs";
 import { stateDir } from "./lib/state-dir.mjs";
 import { dropInvalidSessions } from "./lib/sessions.mjs";
+import { loadHookLedger, parseHookInput, readLoginOrg, recordHookSession } from "./lib/claude-account.mjs";
 
 // Usage parsers, in upload order. Each exports `tool` and
 // `aggregate({ sinceDate, machineId, attribution })` →
@@ -71,6 +72,9 @@ Options:
   --no-limits        skip the Claude/Codex plan rate-limit snapshot (see below)
   --no-digest        skip the daily digest draft (see README); config.json의
                      "digest": false 로도 끌 수 있습니다
+  --hook             run as a Claude Code hook: record which Claude organization
+                     the session is logged in to (organization id only, never
+                     the email), then upload — a SessionStart call only records
   --dry-run          print per-tool session counts, token sums and parser
                      health; send nothing, leave the cursor alone
   -h, --help         show this help
@@ -86,7 +90,8 @@ Configuration (highest precedence first):
   3. Config file: ~/.config/token-forest/config.json
                   { "serverUrl": "...", "token": "...", "deviceLabel": "..." }
 
-State (device-id, cursor.json, claude-attr.json) lives in ~/.token-forest;
+State (device-id, cursor.json, claude-attr.json, claude-accounts.jsonl) lives in
+~/.token-forest;
 TOKEN_FOREST_STATE_DIR overrides the folder.
 
 Examples:
@@ -134,6 +139,18 @@ function printSessionSummary(sessions, health, { mode, sinceDate, machineId, dev
         `input ${fmtInt(t.input)}  output ${fmtInt(t.output)}  cacheRead ${fmtInt(t.cacheRead)}  ` +
         `cacheCreate ${fmtInt(t.cacheCreate)}  reqs ${fmtInt(t.reqs)}`,
     );
+  }
+  // Claude organization tags (lib/claude-account.mjs): how many request counts
+  // carry which evidence. Organization ids are shortened; no email is involved.
+  const tags = new Map();
+  for (const s of sessions) {
+    if (s.tool !== "claude_code") continue;
+    const key = s.accountOrg ? `${s.accountEvidence} ${s.accountOrg.slice(0, 8)}` : "untagged";
+    tags.set(key, (tags.get(key) ?? 0) + (s.requests ?? 0));
+  }
+  if (tags.size > 0) {
+    console.log("claude_code organization tags (requests):");
+    for (const [key, reqs] of [...tags].sort((x, y) => y[1] - x[1])) console.log(`  ${key.padEnd(22)}  ${fmtInt(reqs)}`);
   }
   console.log("parser health:");
   for (const h of health) {
@@ -226,6 +243,21 @@ async function main() {
     return;
   }
 
+  // Called from a Claude Code hook: note which organization this session is
+  // logged in to (lib/claude-account.mjs). A SessionStart call only records —
+  // the upload itself runs at session end and on the hourly schedule.
+  if (flags.hook) {
+    const hook = parseHookInput(process.env.TOKEN_FOREST_HOOK_INPUT);
+    if (hook) {
+      try {
+        recordHookSession(hook.sessionId, readLoginOrg());
+      } catch {
+        // Tagging is best-effort; never block the upload on it.
+      }
+      if (hook.event === "SessionStart") return;
+    }
+  }
+
   let config;
   try {
     config = await resolveConfig(flags);
@@ -292,6 +324,7 @@ async function main() {
   // health code (never the raw message, which may carry paths) so the rest of
   // the run still uploads.
   const attribution = loadAttribution();
+  const accountLedger = loadHookLedger();
   let attributionSeen = null; // key16s met by the claude parser (R20 prune set)
   let attributionScan = null; // that scan's { files, dirErrors }
   const rows = [];
@@ -306,6 +339,7 @@ async function main() {
         sinceDate: window.sinceDate ?? undefined,
         machineId: config.machineId,
         attribution,
+        accountLedger,
       }));
       rows.push(...r.rows);
       hourlyRows.push(...r.hourlyRows);

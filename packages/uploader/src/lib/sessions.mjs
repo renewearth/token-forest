@@ -7,6 +7,7 @@
 // hour is the KST bucket ("YYYY-MM-DDTHH"), same as the v1 hourly mirror.
 
 import { kstHour } from "./kst.mjs";
+import { MIXED_ORG, cleanOrg, mergeAccount } from "./claude-account.mjs";
 
 // Bump when a parser's counting changes: the server overwrites rows from an
 // older parserVersion instead of max-merging, so a corrected parser can lower a
@@ -45,7 +46,9 @@ function cmp(a, b) {
 // → [{ tool, sessionId, hour, model, provider, inputTokens, outputTokens,
 //      cacheReadTokens, cacheCreationTokens, requests, parserVersion }]
 // Token fields are summed per key; requests = number of events. provider is ""
-// when unknown (the first non-empty provider seen for a key wins). Sorted by
+// when unknown (the first non-empty provider seen for a key wins). An event may
+// carry accountOrg/accountEvidence (lib/claude-account.mjs); the row keeps the
+// strongest evidence and becomes "mixed" on a same-rank disagreement. Sorted by
 // (tool, sessionId, hour, model). A parser that already computed the KST
 // `hour` may pass it (then ts is not re-parsed); otherwise hour = kstHour(ts),
 // and events with an unparseable ts are dropped.
@@ -76,6 +79,7 @@ export function bucketEvents(events) {
       acc.set(key, row);
     }
     if (!row.provider && typeof e.provider === "string" && e.provider) row.provider = e.provider;
+    if (e.accountOrg) mergeAccount(row, e.accountOrg, e.accountEvidence);
     for (const field of METRICS) addMetric(row, field === "requests" ? { requests: e.requests ?? 1, fieldEvidence: e.fieldEvidence } : e, field);
     if (row.fieldEvidence.sessions !== (e.fieldEvidence?.sessions ?? "known")) row.fieldEvidence.sessions = "unknown";
     if (row.dateBasis !== (e.dateBasis ?? "KST")) row.dateBasis = "미확인";
@@ -104,6 +108,10 @@ export function isValidSessionRow(r) {
   if (typeof r.hour !== "string" || !HOUR_RE.test(r.hour)) return false;
   if (r.model !== undefined && !str(r.model, 0, 200)) return false;
   if (r.provider !== undefined && !str(r.provider, 0, 60)) return false;
+  if (r.accountOrg !== undefined || r.accountEvidence !== undefined) {
+    if (r.accountOrg !== MIXED_ORG && !cleanOrg(r.accountOrg)) return false;
+    if (!["transcript", "hook"].includes(r.accountEvidence)) return false;
+  }
   for (const f of COUNT_FIELDS) {
     const v = r[f];
     if (v != null && !(Number.isInteger(v) && v >= 0)) return false;

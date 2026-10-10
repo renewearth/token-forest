@@ -50,6 +50,7 @@ export function parseArgs(argv) {
     digest: true,
     full: false,
     deviceLabel: null,
+    hook: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -72,6 +73,9 @@ export function parseArgs(argv) {
         break;
       case "--full":
         flags.full = true;
+        break;
+      case "--hook":
+        flags.hook = true;
         break;
       case "--claude-dir": {
         const v = argv[++i];

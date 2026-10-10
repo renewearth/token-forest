@@ -24,6 +24,7 @@ import { createInterface } from "node:readline";
 import { kstDate, kstHour } from "../lib/kst.mjs";
 import { addMetric, bucketEvents, emptyMetrics, fileStem, makeHealth } from "../lib/sessions.mjs";
 import { attrKey } from "../lib/claude-attr.mjs";
+import { cleanOrg, mergeAccount } from "../lib/claude-account.mjs";
 
 export const tool = "claude_code";
 
@@ -84,7 +85,14 @@ function num(v) {
 // that session look partial. Counted in stats.skippedPinnedAbsent. (The v1
 // daily `rows` still count it: they are per-day totals, not session keyed.)
 // Without `attribution` the output is exactly the plain min rule.
-export async function aggregate({ sinceDate, machineId = "", attribution } = {}) {
+//
+// Account tagging (lib/claude-account.mjs): a counted message takes the
+// organization of the latest `bridge-session` line before it in the same file
+// ("transcript" evidence). Messages without one fall back to `accountLedger`
+// (optional Map<sessionId, organization>, "hook" evidence), looked up by the
+// message's FINAL sessionId only — a resumed session copies earlier lines, and
+// those must not inherit the organization of the later session.
+export async function aggregate({ sinceDate, machineId = "", attribution, accountLedger } = {}) {
   // key `${date}|${model}` -> accumulator
   const days = new Map();
   // key `${hour}|${model}` -> accumulator (hour = "YYYY-MM-DDTHH", KST). Same
@@ -131,6 +139,8 @@ export async function aggregate({ sinceDate, machineId = "", attribution } = {})
       }
     }
     stats.files++;
+    // Organization of the latest bridge-session line in this file, if any.
+    let fileOrg = null;
     const rl = createInterface({
       input: createReadStream(file, { encoding: "utf8" }),
       crlfDelay: Infinity,
@@ -144,6 +154,11 @@ export async function aggregate({ sinceDate, machineId = "", attribution } = {})
       } catch {
         stats.malformed++;
         continue; // skip malformed lines silently
+      }
+
+      if (entry?.type === "bridge-session") {
+        fileOrg = cleanOrg(entry.ownerOrganizationUuid) ?? fileOrg;
+        continue;
       }
 
       const message = entry?.message;
@@ -164,6 +179,7 @@ export async function aggregate({ sinceDate, machineId = "", attribution } = {})
         stats.duplicates++;
         const first = counted.get(dedupKey);
         if (first && sessionId < first.sessionId) first.sessionId = sessionId;
+        if (first && fileOrg) mergeAccount(first, fileOrg, "transcript");
         continue;
       }
       seen.add(dedupKey);
@@ -193,6 +209,7 @@ export async function aggregate({ sinceDate, machineId = "", attribution } = {})
         outputTokens,
         cacheReadTokens,
         cacheCreationTokens,
+        ...(fileOrg ? { accountOrg: fileOrg, accountEvidence: "transcript" } : {}),
       });
 
       const key = `${date}|${model}`;
@@ -308,6 +325,14 @@ export async function aggregate({ sinceDate, machineId = "", attribution } = {})
 
   // Second pass: bucket each counted message under its smallest sessionId
   // (final only now that every file has been scanned).
+  if (accountLedger?.size) {
+    const tagged = [];
+    for (const ev of sessionEvents) {
+      const org = ev.accountEvidence ? undefined : accountLedger.get(ev.sessionId);
+      tagged.push(org ? { ...ev, accountOrg: org, accountEvidence: "hook" } : ev);
+    }
+    sessionEvents = tagged;
+  }
   const sessions = bucketEvents(sessionEvents);
   const health = makeHealth(
     tool,
