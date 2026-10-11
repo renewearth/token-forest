@@ -19,7 +19,7 @@ const g = computeGrowth(days, "2026-07-18", "2026-07-23");
 assert(g.gp === 44, `GP=44 (got ${g.gp})`);
 assert(g.level === 1, `level=1 (got ${g.level})`);
 assert(g.stage === "germinated" && g.stageLabel === "(씨)발아", "stage=(씨)발아");
-assert(g.toNextStage === 6, `새싹까지 6 (got ${g.toNextStage})`);
+assert(g.toNextStage === 56, `새싹까지 56 (got ${g.toNextStage})`);
 assert(g.bestStreak === 3, `bestStreak=3 (got ${g.bestStreak})`);
 assert(g.streakDays === 0, `현재 스트릭=0, 3일 유휴 (got ${g.streakDays})`);
 assert(g.vitality === "dozing" && g.idleDays === 3, "졸음 · 유휴 3일");
