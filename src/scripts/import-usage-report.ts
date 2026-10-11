@@ -20,7 +20,7 @@ async function main() {
   });
   if (process.argv.includes("--write")) {
     await upsertUsageReports(rows);
-    console.log(`보고서 ${rows.length}행 저장. 대시보드 토큰 합계에는 포함하지 않습니다.`);
-  } else console.log(`검증 통과: ${rows.length}행. 저장하지 않았습니다 (--write로 저장). 기간 합계 유지, 토큰 합계 자동 반영 없음.`);
+    console.log(`보고서 ${rows.length}행 저장. 하루 단위 보고서는 대시보드 사용량에 반영됩니다(Claude Code는 수집분과 비교해 큰 쪽).`);
+  } else console.log(`검증 통과: ${rows.length}행. 저장하지 않았습니다 (--write로 저장). 하루 단위 보고서만 대시보드 사용량에 반영됩니다.`);
 }
 main().catch(error => { console.error(error instanceof Error ? error.message : "가져오기 실패"); process.exitCode = 1; }).finally(closeDb);
