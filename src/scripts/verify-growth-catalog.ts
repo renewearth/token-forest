@@ -15,7 +15,7 @@ assert(
 );
 assert(STAGE_CATALOG.length === 6, `스테이지 6단계 (got ${STAGE_CATALOG.length})`);
 assert(
-  JSON.stringify(STAGE_CATALOG.map((s) => s.minGp)) === JSON.stringify([0, 50, 150, 350, 700, 1300]),
+  JSON.stringify(STAGE_CATALOG.map((s) => s.minGp)) === JSON.stringify([0, 100, 400, 1000, 2200, 4500]),
   "임계값 0/50/150/350/700/1300",
 );
 

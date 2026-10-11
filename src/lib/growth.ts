@@ -75,13 +75,14 @@ function meetsActivityFloor(d: GrowthDay): boolean {
 }
 
 // 단계: [key, emoji, label, minGP]. 마지막이 상한(무한).
+// 경계는 꾸준한 사용자가 활동일 하루 20~25 GP를 얻는 속도에 맞췄다(고목 ≈ 반년).
 const STAGES: Array<[string, string, string, number]> = [
   ["germinated", "🌱", "(씨)발아", 0],
-  ["seedling", "🌿", "새싹", 50],
-  ["sapling", "🪴", "묘목", 150],
-  ["young", "🌳", "어린나무", 350],
-  ["mature", "🌲", "큰나무", 700],
-  ["ancient", "🌳✨", "고목", 1300],
+  ["seedling", "🌿", "새싹", 100],
+  ["sapling", "🪴", "묘목", 400],
+  ["young", "🌳", "어린나무", 1000],
+  ["mature", "🌲", "큰나무", 2200],
+  ["ancient", "🌳✨", "고목", 4500],
 ];
 
 // 연속일 → 배수 (내림차순 매칭).
