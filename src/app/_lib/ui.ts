@@ -12,6 +12,13 @@ const TOOL_LABELS: Record<string, string> = {
   gemini_workspace: "Gemini Workspace",
   grok: "Grok",
   opencode: "OpenCode",
+  // Claude products that only the spend report sees (growth-days.ts reportProductTool).
+  claude_chat: "Claude Chat",
+  claude_cowork: "Claude Cowork",
+  claude_tag: "Claude Tag",
+  claude_design: "Claude Design",
+  claude_office_agents: "Claude Office Agents",
+  claude_in_chrome: "Claude in Chrome",
 };
 
 export function toolLabel(tool: string): string {

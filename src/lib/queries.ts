@@ -35,6 +35,7 @@ import { EMPTY_SUMS, addSums } from "@/lib/scorecard";
 import type { ScoreSums } from "@/lib/scorecard";
 import { DERIVED_MACHINE_ID } from "@/lib/sessions";
 import { applyReviewedCutovers } from "@/lib/collection-cutover-db";
+import { loadReportFacts, mergeReportFacts } from "@/lib/usage-report-rows";
 
 // Fixed legacy/scoring tokens per row = input + output. Display queries opt
 // into UsageSelection explicitly; do not change this shared scoring rule. Cache tokens are excluded — they
@@ -103,7 +104,10 @@ async function displayRows(
   }));
   const selected = source === "daily" || source === "hourly"
     ? await applyReviewedCutovers(facts, match, source === "daily" ? "day" : "hour") : facts;
-  return projectUsage(selected, table, sel);
+  // Daily views also count the Claude spend report (usage-report-rows.ts).
+  // Hourly, session and legacy rows have no report counterpart.
+  const combined = source === "daily" ? mergeReportFacts(selected, await loadReportFacts(match)) : selected;
+  return projectUsage(combined, table, sel);
 }
 
 // ---- Overview ---------------------------------------------------------------

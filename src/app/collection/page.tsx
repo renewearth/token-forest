@@ -20,7 +20,7 @@ export default async function CollectionPage() {
     <PageHeader title="도구별 수집"><p className="text-sm text-[var(--text-secondary)]">도구별 기록이 어디까지 수신됐는지 확인합니다.</p></PageHeader>
     <ToolCollectionOverview key={viewer.status === "member" ? viewer.member.id : viewer.status} signedIn={viewer.status === "member"} history={collection?.history ?? []} />
     <Card title="현재 그래프에 포함되는 범위" hint="도구의 사용 여부와 수집 여부는 다릅니다">
-      <p className="text-sm leading-6 text-[var(--text-secondary)]">대시보드는 수신된 일별·세션 기록을 보여줍니다. 웹·앱 보고서와 과금 자료는 아래에서 별도로 확인합니다. 서로 겹치는 계정·제품·기간을 대조하기 전에는 전체 토큰이나 요청 수에 더하지 않습니다.</p>
+      <p className="text-sm leading-6 text-[var(--text-secondary)]">대시보드는 수신된 일별·세션 기록을 보여줍니다. 웹·앱 보고서와 과금 자료는 아래에서 별도로 확인합니다. Claude 하루 단위 지출 보고서는 대시보드 사용량에 반영하며, Claude Code는 수신 기록과 비교해 큰 쪽만 셉니다. 그 밖의 자료는 서로 겹치는 계정·제품·기간을 대조하기 전에는 전체 토큰이나 요청 수에 더하지 않습니다.</p>
       <p className="mt-2 text-sm">토큰이 제공되지 않으면 <strong>미제공</strong>, 보고서를 받지 못했으면 <strong>미수신</strong>입니다. 사용량 0을 뜻하지 않습니다.</p>
       <Link href="/" className="mt-3 inline-block text-sm text-[var(--accent-strong)] underline">사용량 그래프 보기</Link>
     </Card>
