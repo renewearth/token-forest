@@ -47,7 +47,7 @@ import { ModelDonut } from "@/app/_components/analytics/ModelDonut";
 import { WowTable } from "@/app/_components/analytics/WowTable";
 import { getNumStyle } from "@/app/_lib/numfmt";
 import TeamScorecard from "@/app/_components/analytics/TeamScorecard";
-import UsageCharacteristics from "@/app/_components/UsageCharacteristics";
+import TeamAxes from "@/app/_components/TeamAxes";
 import CollectionStatusPanel from "@/app/_components/CollectionStatusPanel";
 import {
   adoptionLeadDays,
@@ -378,7 +378,7 @@ export default async function TeamPage({
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card title="사용 특성 상세" hint="고정 기준 · 주별 · 풀드/중앙값 병기 · 순위 없음" className="lg:col-span-2">
           <div className="mb-6">
-            <UsageCharacteristics range={range} />
+            <TeamAxes />
           </div>
           {scoreWeekly.length ? (
             <TeamScorecard

@@ -30,7 +30,7 @@ import { todayKst } from "@/lib/date";
 import { ActivityCalendar, ActivityCalendarProvider } from "@/app/_components/ActivityCalendar";
 import ForestScene from "@/app/_components/ForestScene";
 import SymbolLegend from "@/app/_components/SymbolLegend";
-import UsageCharacteristics from "@/app/_components/UsageCharacteristics";
+import TeamAxes from "@/app/_components/TeamAxes";
 import RecentExperiments from "@/app/_components/RecentExperiments";
 
 export default async function OverviewPage({
@@ -83,7 +83,7 @@ export default async function OverviewPage({
       </div>
 
       <div className="my-6"><RecentExperiments /></div>
-      <div className="my-6"><UsageCharacteristics range={range} /></div>
+      <div className="my-6"><TeamAxes /></div>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         {/* Bottom status strip: Claude limits (left 2/3, grows with members) +
             data freshness (right 1/3, fixed-size). Freshness is pinned to
