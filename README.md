@@ -12,7 +12,7 @@
 [Cursor Admin API]  ┐
 [Anthropic Admin]   ├─ 폴러 (in-process cron, 매 정시) ───────┐
 [Gemini Workspace] │                                         ├─→ MongoDB ─→ 웹 대시보드
-[GitHub billing]   ┘                                         │        └──→ Slack 주간 리포트 (월 09:30 KST)
+[GitHub billing]   ┘                                         │        └──→ Slack 주간 리포트 (수동: pnpm report)
 [로컬 업로더 CLI (Claude Code·Codex·Gemini·Grok·opencode)] ─┐   │
 [수동 입력 폼 / CSV 임포트]                                 ─┴─ POST /api/ingest ┘
    (업로더는 세션 단위로 전송 — 서버가 필드별 최댓값으로 병합)
