@@ -289,6 +289,23 @@ const MILESTONES = {
   ] as Array<[number, string]>,
 };
 
+// ── 레벨 ──
+// 레벨 L에 닿는 데 필요한 GP = LEVEL_SCALE × (L−1)². 올라갈수록 다음 레벨까지가
+// 멀어진다 — 처음 며칠은 빨리 오르고, 넉 달쯤 쓴 사람이 Lv 16~18에 머문다.
+// (예전에는 50 GP마다 1레벨이라 레벨이 활동한 날 수와 거의 같았고, 한 달 쓴
+// 사람이 Lv 16까지 올랐다.)
+export const LEVEL_SCALE = 10;
+export function levelMinGp(level: number): number {
+  return LEVEL_SCALE * (level - 1) ** 2;
+}
+export function levelFor(gp: number): number {
+  let level = Math.floor(Math.sqrt(Math.max(0, gp) / LEVEL_SCALE)) + 1;
+  // 제곱근의 부동소수 오차 보정 — 경계값에서 한 칸 어긋나지 않게.
+  while (levelMinGp(level + 1) <= gp) level++;
+  while (level > 1 && levelMinGp(level) > gp) level--;
+  return level;
+}
+
 // ── 숲 장식: 요즘 상태 ──
 // 나무 단계와 레벨이 쌓아온 것을 보여주므로 장식은 지금 상태만 보여준다. 축마다
 // 해당하는 가장 높은 단계 하나만 달아(최대 4개) 나무끼리 구분되게 한다. 한 번 딴
@@ -447,8 +464,8 @@ export function computeGrowth(
   gp += revival.bonusGp; // C1 품질 보너스
 
   const [stage, stageEmoji, stageLabel, , nextStageMin] = stageFor(gp);
-  const level = Math.floor(gp / 50) + 1;
-  const toNextLevel = 50 - (gp % 50);
+  const level = levelFor(gp);
+  const toNextLevel = levelMinGp(level + 1) - gp;
   const toNextStage = nextStageMin === null ? null : nextStageMin - gp;
 
   const streakDays = streakEndingAt(activeOrHealed, today, earliest, unconfirmed);
