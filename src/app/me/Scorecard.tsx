@@ -3,8 +3,7 @@ import { InfoTip } from "@/app/_components/InfoTip";
 import { METRIC_INFO } from "@/lib/metric-info";
 import { getScorecardSums, getGrowthDays } from "@/lib/queries";
 import { getViewer } from "@/lib/auth";
-import { connectDb, Member } from "@/lib/db";
-import { isoDaysAgo, todayUtc } from "@/lib/date";
+import { isoDaysAgo, teamEpoch, todayUtc } from "@/lib/date";
 import {
   EMPTY_SUMS, addSums, cacheReuseRatio, contextYield, sessionDepth,
   requestAnatomy, toolEntropy, median,
@@ -58,12 +57,7 @@ export default async function Scorecard({ memberId }: { memberId: string }) {
   const mine = perMember.get(memberId);
   if (!mine) return null;
 
-  await connectDb();
-  const me = await Member.findById(memberId, { onboardedAt: 1 }).lean();
-  const onboarded = me?.onboardedAt
-    ? new Date(me.onboardedAt).toISOString().slice(0, 10)
-    : null;
-  const days = await getGrowthDays(memberId, onboarded ?? "1970-01-01");
+  const days = await getGrowthDays(memberId, teamEpoch());
   const weeklyActive = days.filter((d) => d.date >= isoDaysAgo(7)).length;
 
   const others = [...perMember.values()];

@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
 
   const today = todayKst();
   const [days, machines, limits, unconfirmed] = await Promise.all([
-    getGrowthDays(id, onboarded ?? "1970-01-01"),
+    getGrowthDays(id, teamEpoch()),
     getMyMachines(member.email),
     getLatestLimits(id),
     getUnconfirmedGrowthDates(today),
