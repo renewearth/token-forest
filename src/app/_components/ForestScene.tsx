@@ -23,8 +23,9 @@ type Off = { x: number; top?: number; bottom?: number; size?: number };
 const OFF_BY_ZONE: Record<OrnamentZone, Off[]> = {
   air: [{ x: 0, top: -22, size: 19 }],      // 연속 — 수관 위
   aura: [{ x: -26, top: 2, size: 15 }],     // 사용 보너스 — 수관 왼쪽 위(광채와 함께)
-  ground: [{ x: -30, bottom: 18, size: 19 }], // 최근 활동 — 밑동 왼쪽
-  flora: [{ x: 28, bottom: 16, size: 19 }],  // 도구 — 밑동 오른쪽
+  // 이름표와 불꽃 배지가 나무 아래 약 44px을 차지한다 — 그 위, 밑동 양옆에 둔다.
+  ground: [{ x: -34, bottom: 50, size: 19 }], // 최근 활동 — 밑동 왼쪽
+  flora: [{ x: 34, bottom: 50, size: 19 }],  // 도구 — 밑동 오른쪽
 };
 
 const BAND_BG: Record<TimeBand, string> = {
