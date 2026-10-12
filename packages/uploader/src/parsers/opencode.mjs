@@ -210,6 +210,12 @@ export async function aggregate({ sinceDate, machineId = "", dbPath } = {}) {
     try { db.close(); } catch { /* already closed */ }
   }
 
+  // The DB is one file that is always there, so "opened" says nothing about
+  // the window. No message in the window = nothing scanned, like a log file
+  // the other parsers skip by mtime — otherwise an idle day reads as
+  // "scanned 1, emitted 0" and the server flags the parser as broken.
+  if (stats.linesRead === 0) stats.files = 0;
+
   stats.events = events.length;
   const sessions = bucketEvents(events);
   const { rows, hourlyRows } = foldRows(sessions, machineId);

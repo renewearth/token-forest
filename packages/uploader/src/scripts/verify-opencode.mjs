@@ -157,6 +157,22 @@ const tok = (input, output, reasoning, read, write) => ({
   eq("since: KST hour 00", res.sessions[0]?.hour, "2026-09-30T00");
   const all = await aggregate({ dbPath: file });
   eq("no sinceDate: everything", all.sessions.length, 2);
+  // Idle window: the DB exists but holds nothing in the window. Reporting it as
+  // scanned would look like a parser that reads and emits nothing.
+  const idle = await aggregate({ sinceDate: "2026-10-05", dbPath: file });
+  eq("idle window: health reports nothing scanned", idle.health,
+    { parser: "opencode", filesScanned: 0, linesUnrecognized: 0, sessionsEmitted: 0 });
+}
+
+// Messages in the window that yield no usage still count as scanned, so a
+// format change (read rows, emit nothing) stays visible.
+{
+  const file = makeDb("unreadable-shape.db", [
+    { id: "u1", session_id: "ses_U", time_created: T, data: JSON.stringify({ role: "assistant" }) },
+  ]);
+  const res = await aggregate({ sinceDate: "2026-09-30", dbPath: file });
+  eq("rows read but none usable: scanned 1, emitted 0", res.health,
+    { parser: "opencode", filesScanned: 1, linesUnrecognized: 0, sessionsEmitted: 0 });
 }
 
 // Malformed JSON counts as unrecognized; assistant without tokens is ignored;
