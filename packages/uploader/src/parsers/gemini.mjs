@@ -13,11 +13,10 @@
 //
 // Sibling of codex.mjs / claude-code.mjs — same { tool, aggregate } contract.
 
-import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { createInterface } from "node:readline";
+import { readLines } from "../lib/read-lines.mjs";
 import { kstDate, kstHour } from "../lib/kst.mjs";
 import { addMetric, bucketEvents, emptyMetrics, fileStem, makeHealth } from "../lib/sessions.mjs";
 
@@ -219,10 +218,7 @@ export async function aggregate({ sinceDate, machineId = "" } = {}) {
     }
     stats.files++;
     const lines = [];
-    const rl = createInterface({
-      input: createReadStream(file, { encoding: "utf8" }),
-      crlfDelay: Infinity,
-    });
+    const rl = readLines(file);
     for await (const line of rl) {
       if (!line) continue;
       stats.linesRead++;

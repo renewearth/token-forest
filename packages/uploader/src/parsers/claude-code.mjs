@@ -16,11 +16,10 @@
 // This module is deliberately self-contained: adding a codex parser later means
 // dropping a sibling file that exports the same { tool, aggregate } shape.
 
-import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { createInterface } from "node:readline";
+import { readLines } from "../lib/read-lines.mjs";
 import { kstDate, kstHour } from "../lib/kst.mjs";
 import { addMetric, bucketEvents, emptyMetrics, fileStem, makeHealth } from "../lib/sessions.mjs";
 import { attrKey } from "../lib/claude-attr.mjs";
@@ -141,10 +140,7 @@ export async function aggregate({ sinceDate, machineId = "", attribution, accoun
     stats.files++;
     // Organization of the latest bridge-session line in this file, if any.
     let fileOrg = null;
-    const rl = createInterface({
-      input: createReadStream(file, { encoding: "utf8" }),
-      crlfDelay: Infinity,
-    });
+    const rl = readLines(file);
     for await (const line of rl) {
       if (!line) continue;
       stats.linesRead++;
