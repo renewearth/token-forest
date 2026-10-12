@@ -1,4 +1,4 @@
-import { MILESTONE_CATALOG, STAGE_CATALOG } from "@/lib/growth";
+import { ORNAMENT_CATALOG, STAGE_CATALOG } from "@/lib/growth";
 
 // 숲 기호 프레젠테이션 조합(엔진 규칙 없음). 카탈로그가 단일 소스.
 
@@ -17,20 +17,23 @@ export const STAGE_LEGEND: SymbolItem[] = [
   ...STAGE_CATALOG.map((s) => ({ emoji: s.emoji, label: s.label, threshold: s.minGp })),
 ];
 
-const AXIS_META: Record<string, { axisLabel: string; meaning: string }> = {
-  streak: { axisLabel: "스트릭", meaning: "며칠 연달아 활동했는지 (주말·공휴일은 유지, 끊겨도 되살리기 가능)" },
-  active_days: { axisLabel: "활동일", meaning: "팀 추적 시작 이후 활동한 날 누적" },
-  efficiency: { axisLabel: "사용 보너스", meaning: "많이·다양하게 쓴 날(사용 보너스 3점 이상) — 숲에선 나무 광채로 표시" },
-  tools: { axisLabel: "도구", meaning: "사용한 AI 도구 종류 수" },
-};
-const AXIS_ORDER = ["streak", "active_days", "efficiency", "tools"];
+// 장식은 요즘 상태다 — 축마다 지금 해당하는 가장 높은 단계 하나만 달린다.
+export const ORNAMENT_NOTE = "장식은 요즘 상태를 보여줍니다. 종류마다 지금 해당하는 것 하나만 달리고, 사용이 줄면 내려가고 다시 쓰면 올라갑니다.";
 
-export function milestoneGroups(): MilestoneAxisGroup[] {
+const AXIS_META: Record<string, { axisLabel: string; meaning: string }> = {
+  streak: { axisLabel: "연속", meaning: "지금 며칠째 이어 쓰고 있는지 (주말·공휴일은 유지, 끊겨도 되살리기 가능)" },
+  recent_days: { axisLabel: "최근 활동", meaning: "최근 30일 중 AI를 쓴 날 수" },
+  recent_bonus: { axisLabel: "사용 보너스", meaning: "최근 30일 중 사용 보너스 3점 이상인 날 수 — 숲에선 나무 광채도 함께 표시" },
+  recent_tools: { axisLabel: "도구", meaning: "최근 30일에 쓴 AI 도구 종류 수" },
+};
+const AXIS_ORDER = ["streak", "recent_days", "recent_bonus", "recent_tools"];
+
+export function ornamentGroups(): MilestoneAxisGroup[] {
   return AXIS_ORDER.map((axis) => ({
     axis,
     axisLabel: AXIS_META[axis].axisLabel,
     meaning: AXIS_META[axis].meaning,
-    tiers: MILESTONE_CATALOG.filter((m) => m.axis === axis).map((m) => ({
+    tiers: ORNAMENT_CATALOG.filter((m) => m.axis === axis).map((m) => ({
       emoji: m.emoji,
       label: m.label,
       threshold: m.threshold,

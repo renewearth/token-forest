@@ -57,7 +57,7 @@ export function pickAnimal(seed: number, band: TimeBand): string {
 }
 
 // --- 마일스톤 장식 매핑 (구역 모델) ---
-// 배지 이모지는 growth.ts 기본을 그대로 재사용. 숲 전용 스프라이트 안 만듦.
+// 장식 이모지는 growth.ts의 ORNAMENT_CATALOG와 같은 키를 쓴다. 숲 전용 스프라이트 안 만듦.
 
 export type OrnamentZone = "air" | "ground" | "aura" | "flora";
 
@@ -66,31 +66,37 @@ export type Ornament = {
   zone: OrnamentZone;
   emoji: string;
   motion: string; // CSS 클래스 접미 → fs-orn-<motion>
-  index: number; // 같은 zone 내 순번(위치 분산). 마일스톤은 누적이라 티어 순서와 일치.
+  glow?: string; // aura 전용: 나무 뒤 광채의 CSS 클래스 접미
+  index: number; // 같은 zone 내 순번. 축마다 하나만 달리므로 보통 0.
 };
 
-// 정의 순서 = 순회 순서 = 결정성. 각 축 티어 오름차순.
-const ORNAMENT_MAP: Record<string, { zone: OrnamentZone; emoji: string; motion: string }> = {
+// 정의 순서 = 순회 순서 = 결정성. 축마다 단계 오름차순.
+const ORNAMENT_MAP: Record<string, { zone: OrnamentZone; emoji: string; motion: string; glow?: string }> = {
   streak_3: { zone: "air", emoji: "🌸", motion: "pulse" },
-  streak_7: { zone: "air", emoji: "🦋", motion: "orbit-wide" },
+  streak_7: { zone: "air", emoji: "🦋", motion: "orbit-tight" },
   streak_14: { zone: "air", emoji: "🐝", motion: "orbit-tight" },
-  streak_30: { zone: "air", emoji: "🌈", motion: "breathe" },
+  streak_30: { zone: "air", emoji: "🌈", motion: "pulse" },
   streak_60: { zone: "air", emoji: "⭐", motion: "twinkle" },
-  active_days_10: { zone: "ground", emoji: "💧", motion: "drip" },
-  active_days_30: { zone: "ground", emoji: "🐦", motion: "hop" },
-  active_days_100: { zone: "ground", emoji: "🦌", motion: "rest" },
-  active_days_200: { zone: "ground", emoji: "🦉", motion: "blink" },
-  active_days_365: { zone: "ground", emoji: "🏞️", motion: "fade" },
-  efficiency_7: { zone: "aura", emoji: "☀️", motion: "glow" },
-  efficiency_30: { zone: "aura", emoji: "🌞", motion: "glow-strong" },
-  tools_2: { zone: "flora", emoji: "🍄", motion: "sway-s" },
-  tools_3: { zone: "flora", emoji: "🌾", motion: "sway-m" },
-  tools_4: { zone: "flora", emoji: "🌻", motion: "sway-l" },
+  streak_100: { zone: "air", emoji: "☄️", motion: "twinkle" },
+  recent_days_10: { zone: "ground", emoji: "💧", motion: "pulse" },
+  recent_days_15: { zone: "ground", emoji: "🐦", motion: "hop" },
+  recent_days_20: { zone: "ground", emoji: "🐿️", motion: "hop" },
+  recent_days_25: { zone: "ground", emoji: "🦌", motion: "rest" },
+  recent_days_30: { zone: "ground", emoji: "🦉", motion: "blink" },
+  recent_bonus_5: { zone: "aura", emoji: "🌤️", motion: "pulse", glow: "glow" },
+  recent_bonus_10: { zone: "aura", emoji: "☀️", motion: "pulse", glow: "glow" },
+  recent_bonus_15: { zone: "aura", emoji: "🌞", motion: "twinkle", glow: "glow-strong" },
+  recent_bonus_25: { zone: "aura", emoji: "🌟", motion: "twinkle", glow: "glow-strong" },
+  recent_tools_2: { zone: "flora", emoji: "🍄", motion: "sway-s" },
+  recent_tools_3: { zone: "flora", emoji: "🌾", motion: "sway-m" },
+  recent_tools_4: { zone: "flora", emoji: "🌻", motion: "sway-l" },
+  recent_tools_5: { zone: "flora", emoji: "🌺", motion: "sway-m" },
+  recent_tools_6: { zone: "flora", emoji: "🌴", motion: "sway-s" },
 };
 
-// 언락 마일스톤 → 장식 리스트. 매핑에 없는 키 무시. zone별 index 부여.
-export function ornamentsFor(milestones: string[]): Ornament[] {
-  const has = new Set(milestones);
+// 장식 키 → 장식 리스트. 매핑에 없는 키 무시. zone별 index 부여.
+export function ornamentsFor(keys: string[]): Ornament[] {
+  const has = new Set(keys);
   const byZone: Record<string, number> = {};
   const out: Ornament[] = [];
   for (const key of Object.keys(ORNAMENT_MAP)) {
@@ -98,7 +104,7 @@ export function ornamentsFor(milestones: string[]): Ornament[] {
     const m = ORNAMENT_MAP[key];
     const index = byZone[m.zone] ?? 0;
     byZone[m.zone] = index + 1;
-    out.push({ key, zone: m.zone, emoji: m.emoji, motion: m.motion, index });
+    out.push({ key, zone: m.zone, emoji: m.emoji, motion: m.motion, ...(m.glow ? { glow: m.glow } : {}), index });
   }
   return out;
 }

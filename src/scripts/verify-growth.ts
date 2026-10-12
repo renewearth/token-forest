@@ -106,6 +106,47 @@ assert(broken.streakDays === 1 && broken.bestStreak === 3, `확인된 결석 6�
 // 확인 중인 날은 연속 길이에 더해지지 않는다(멈춰 둘 뿐).
 assert(streakEndingAt(new Set(["2026-09-01", "2026-09-03"]), "2026-09-03", "2026-09-01", new Set(["2026-09-02"])) === 2, "확인 중인 날은 세지 않음");
 
+// --- 숲 장식: 요즘 상태 (축마다 가장 높은 단계 하나) ---
+// 위 픽스처: 3일 활동 뒤 3일 쉼 → 연속 0, 최근 활동 3일, 보너스 3일, 도구 2종.
+assert(JSON.stringify(g.ornaments) === JSON.stringify(["recent_tools_2"]), `첫 단계에 못 미친 축은 장식 없음 (got ${g.ornaments})`);
+assert(d0.ornaments.length === 0, "휴면 → 장식 없음");
+
+const dayAt = (base: string, offset: number) => new Date(Date.parse(`${base}T00:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
+const run = (from: string, n: number, o: Partial<GrowthDay> = {}): GrowthDay[] =>
+  Array.from({ length: n }, (_, i) => ({ date: dayAt(from, i), tools: ["claude_code", "codex"], tokens: 4_000_000, requests: 300, families: ["opus", "gpt"], ...o }));
+
+// 40일 연속(08-01~09-09), 오늘 = 마지막 활동일.
+const steady = computeGrowth(run("2026-08-01", 40), "2026-07-18", "2026-09-09");
+assert(steady.streakDays === 40, `40일 연속 (got ${steady.streakDays})`);
+assert(
+  JSON.stringify(steady.ornaments) === JSON.stringify(["streak_30", "recent_days_30", "recent_bonus_25", "recent_tools_2"]),
+  `축마다 최고 단계 하나만 (got ${steady.ornaments})`,
+);
+assert(steady.milestones.includes("streak_3") && steady.milestones.includes("streak_30"), "누적 기록은 낮은 단계까지 그대로 보관");
+
+// 같은 사람이 20일 쉬면 장식은 내려가고, 누적 기록은 남는다.
+const rested = computeGrowth(run("2026-08-01", 40), "2026-07-18", "2026-09-29");
+assert(
+  JSON.stringify(rested.ornaments) === JSON.stringify(["recent_days_10", "recent_bonus_10", "recent_tools_2"]),
+  `쉬면 장식이 내려감 — 창 30일 중 활동 10일 (got ${rested.ornaments})`,
+);
+assert(rested.milestones.includes("streak_30"), "쉬어도 누적 기록(30일 연속)은 남음");
+
+// 보너스 3점 미만인 날은 보너스 축에 세지 않는다. 도구는 창 안에서 쓴 것만 센다.
+const light = computeGrowth(
+  [...run("2026-08-01", 5, { tools: ["a", "b", "c", "d", "e", "f"] }), ...run("2026-08-11", 30, { tokens: 0, requests: 0, families: [], tools: ["claude_code"] })],
+  "2026-07-18", "2026-09-09",
+);
+assert(!light.ornaments.some((k) => k.startsWith("recent_bonus_")), `가벼운 사용만 → 보너스 장식 없음 (got ${light.ornaments})`);
+assert(!light.ornaments.some((k) => k.startsWith("recent_tools_")), `창 밖 도구는 세지 않음 — 창 안 1종 (got ${light.ornaments})`);
+assert(light.ornaments.includes("recent_days_30"), "창 30일 모두 활동 → 최근 활동 최고 단계");
+
+// 확인 중인 날은 창에서 건너뛴다 — 보고서를 기다리는 날 때문에 만점 단계를 놓치지 않는다.
+const waiting = computeGrowth(run("2026-08-01", 39), "2026-07-18", "2026-09-09", undefined, new Set(["2026-09-09"]));
+assert(waiting.ornaments.includes("recent_days_30"), `오늘이 확인 중 → 그 전 30일로 판정 (got ${waiting.ornaments})`);
+const unwaited = computeGrowth(run("2026-08-01", 39), "2026-07-18", "2026-09-09");
+assert(unwaited.ornaments.includes("recent_days_25"), `오늘이 빈 날로 확정 → 29일 (got ${unwaited.ornaments})`);
+
 // --- 결정성 ---
 assert(JSON.stringify(computeGrowth(days, "2026-07-18", "2026-07-23")) === JSON.stringify(g), "같은 입력 → 같은 결과");
 assert(JSON.stringify(computeGrowth([...days].reverse(), "2026-07-18", "2026-07-23")) === JSON.stringify(g), "입력 순서 무관");

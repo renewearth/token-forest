@@ -17,30 +17,14 @@ const STAGE_SIZE: Record<string, number> = {
   dormant: 22, germinated: 26, seedling: 34, sapling: 40, young: 46, mature: 52, ancient: 56,
 };
 
-// 나무 기준 장식 오프셋(px). index=티어(누적이라 안정). 시작값 — 시각 확인 후 미세조정.
+// 나무 기준 장식 오프셋(px). 축마다 장식이 하나라 zone별 자리도 하나씩이다.
 // left는 calc(50% + x)로 중앙 기준. top/bottom 중 하나만 지정.
 type Off = { x: number; top?: number; bottom?: number; size?: number };
-const AIR_OFF: Off[] = [
-  { x: -22, top: 6, size: 20 },   // 🌸 pulse
-  { x: 14, top: -8, size: 19 },   // 🦋 orbit-wide
-  { x: 22, top: 22, size: 16 },   // 🐝 orbit-tight
-  { x: 0, top: -4, size: 40 },    // 🌈 breathe (뒤·큼)
-  { x: 0, top: -22, size: 18 },   // ⭐ twinkle (크라운 위)
-];
-const GROUND_OFF: Off[] = [
-  { x: 22, top: 26, size: 14 },   // 💧 drip
-  { x: -28, bottom: 20, size: 18 },// 🐦 hop
-  { x: -46, bottom: 18, size: 22 },// 🦌 rest
-  { x: -22, top: 12, size: 18 },  // 🦉 blink
-  { x: 0, bottom: 18, size: 30 }, // 🏞️ fade (뒤)
-];
-const FLORA_OFF: Off[] = [
-  { x: 12, bottom: 16, size: 19 }, // 🍄 sway-s
-  { x: 26, bottom: 16, size: 18 }, // 🌾 sway-m
-  { x: 2, bottom: 16, size: 20 },  // 🌻 sway-l
-];
 const OFF_BY_ZONE: Record<OrnamentZone, Off[]> = {
-  air: AIR_OFF, ground: GROUND_OFF, flora: FLORA_OFF, aura: [],
+  air: [{ x: 0, top: -22, size: 19 }],      // 연속 — 수관 위
+  aura: [{ x: -26, top: 2, size: 15 }],     // 사용 보너스 — 수관 왼쪽 위(광채와 함께)
+  ground: [{ x: -30, bottom: 18, size: 19 }], // 최근 활동 — 밑동 왼쪽
+  flora: [{ x: 28, bottom: 16, size: 19 }],  // 도구 — 밑동 오른쪽
 };
 
 const BAND_BG: Record<TimeBand, string> = {
@@ -112,7 +96,7 @@ export default async function ForestScene({ band, activity }: { band?: TimeBand;
       />
       {trees.map((t) => {
         const p = pos.get(t.id)!;
-        const orns = ornamentsFor(t.g.milestones);
+        const orns = ornamentsFor(t.g.ornaments);
         const vv = vitalityView(t.g.vitality);
         const aura = orns.filter((o) => o.zone === "aura");
         const ember = t.g.ember;
@@ -149,7 +133,7 @@ export default async function ForestScene({ band, activity }: { band?: TimeBand;
                 <span
                   key={o.key}
                   aria-hidden
-                  className={`fs-orn fs-orn-${o.motion}`}
+                  className={`fs-orn fs-orn-${o.glow ?? "glow"}`}
                   style={{
                     left: "50%",
                     bottom: 8 + i * 6,
@@ -179,8 +163,8 @@ export default async function ForestScene({ band, activity }: { band?: TimeBand;
                   {t.g.stageEmoji}
                 </span>
               </span>
-              {/* air·ground·flora 장식 */}
-              {orns.filter((o) => o.zone !== "aura").map((o) => {
+              {/* 장식 — 축마다 하나 */}
+              {orns.map((o) => {
                 const off = (OFF_BY_ZONE[o.zone][o.index] ?? { x: 0 }) as Off;
                 const v = off.top !== undefined ? { top: off.top } : { bottom: off.bottom ?? 16 };
                 return (

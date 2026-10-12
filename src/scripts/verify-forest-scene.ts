@@ -1,4 +1,5 @@
 import { timeBand, hash32, treeLayout, pickAnimal, ornamentsFor, vitalityView } from "../lib/forest-scene";
+import { ORNAMENT_CATALOG } from "../lib/growth";
 
 function assert(cond: boolean, msg: string) {
   if (!cond) { console.error("FAIL:", msg); process.exit(1); }
@@ -36,46 +37,37 @@ assert(["🐿️", "🐇"].includes(pickAnimal(0, "day")) && ["🐿️", "🐇"]
 assert(["🦌", "🦉"].includes(pickAnimal(0, "night")) && ["🦌", "🦉"].includes(pickAnimal(1, "night")), "밤 = 🦌/🦉");
 assert(["🐿️", "🐇"].includes(pickAnimal(2, "dusk")), "노을 = 낮 후보군");
 
-// --- 마일스톤 장식 매핑 ---
-const ALL_MS = [
-  "streak_3", "streak_7", "streak_14", "streak_30", "streak_60",
-  "active_days_10", "active_days_30", "active_days_100", "active_days_200", "active_days_365",
-  "efficiency_7", "efficiency_30",
-  "tools_2", "tools_3", "tools_4",
-];
-const full = ornamentsFor(ALL_MS);
-assert(full.length === 15, `전 마일스톤 언락 → 15개 (got ${full.length})`);
-const zoneCount = (z: string) => full.filter((o) => o.zone === z).length;
-assert(zoneCount("air") === 5, `air 5개 (got ${zoneCount("air")})`);
-assert(zoneCount("ground") === 5, `ground 5개 (got ${zoneCount("ground")})`);
-assert(zoneCount("aura") === 2, `aura 2개 (got ${zoneCount("aura")})`);
-assert(zoneCount("flora") === 3, `flora 3개 (got ${zoneCount("flora")})`);
+// --- 장식 매핑 (요즘 상태 — 축마다 하나) ---
+const CATALOG_KEYS = ORNAMENT_CATALOG.map((m) => m.key);
+const full = ornamentsFor(CATALOG_KEYS);
+assert(full.length === CATALOG_KEYS.length, `카탈로그의 모든 키에 장식이 있음 (got ${full.length}/${CATALOG_KEYS.length})`);
+assert(
+  full.every((o) => ORNAMENT_CATALOG.find((m) => m.key === o.key)!.emoji === o.emoji),
+  "장식 이모지 = 카탈로그 이모지",
+);
+const ZONE_OF: Record<string, string> = { streak: "air", recent_days: "ground", recent_bonus: "aura", recent_tools: "flora" };
+assert(
+  full.every((o) => ZONE_OF[ORNAMENT_CATALOG.find((m) => m.key === o.key)!.axis] === o.zone),
+  "축마다 zone 하나 (연속=air·활동=ground·보너스=aura·도구=flora)",
+);
+assert(full.filter((o) => o.zone === "aura").every((o) => !!o.glow), "aura 장식은 광채 클래스를 가짐");
+assert(full.filter((o) => o.zone !== "aura").every((o) => o.glow === undefined), "aura 밖에는 광채 없음");
 
 // 결정성 — 입력 순서 뒤집어도 동일 출력
 assert(
-  JSON.stringify(ornamentsFor([...ALL_MS].reverse())) === JSON.stringify(full),
+  JSON.stringify(ornamentsFor([...CATALOG_KEYS].reverse())) === JSON.stringify(full),
   "장식 매핑 입력순서 무관 — 동일 출력",
 );
 
-// zone별 index 0..k-1 연속
-for (const z of ["air", "ground", "aura", "flora"]) {
-  const idxs = full.filter((o) => o.zone === z).map((o) => o.index);
-  assert(
-    JSON.stringify(idxs) === JSON.stringify(idxs.map((_, i) => i)),
-    `${z} index 0..k-1 연속 (got ${idxs})`,
-  );
-}
+// 실제 나무: 축마다 하나 → zone마다 index 0 하나
+const tree = ornamentsFor(["streak_60", "recent_days_25", "recent_bonus_15", "recent_tools_4"]);
+assert(tree.length === 4 && tree.every((o) => o.index === 0), "축마다 하나 → 4개, 전부 index 0");
+assert(tree.map((o) => o.emoji).join("") === "⭐🦌🌞🌻", `이모지 (got ${tree.map((o) => o.emoji).join("")})`);
+assert(tree.find((o) => o.key === "recent_bonus_15")!.glow === "glow-strong", "보너스 15일 → 강한 광채");
 
-// 매핑에 없는 키·빈 배열 → 빈 리스트, 예외 없음
+// 매핑에 없는 키·빈 배열 → 빈 리스트, 예외 없음. 옛 누적 키는 장식이 아니다.
 assert(ornamentsFor([]).length === 0, "빈 입력 → 빈 리스트");
-assert(ornamentsFor(["bogus_9", "streak_999"]).length === 0, "미지 키 무시");
-
-// 부분 언락 — 낮은 티어만
-const partial = ornamentsFor(["streak_3", "streak_7", "tools_2"]);
-assert(partial.length === 3, "부분 언락 3개");
-assert(partial.filter((o) => o.zone === "air").length === 2, "air 2개(부분)");
-assert(partial.find((o) => o.key === "streak_3")!.emoji === "🌸", "streak_3 = 🌸");
-assert(partial.find((o) => o.key === "streak_7")!.motion === "orbit-wide", "streak_7 motion = orbit-wide");
+assert(ornamentsFor(["bogus_9", "streak_999", "active_days_100", "tools_4"]).length === 0, "미지 키·옛 누적 키 무시");
 
 // 활력 뷰
 assert(vitalityView("dozing").sleepEmoji === "💤", "dozing → 💤");

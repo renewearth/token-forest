@@ -44,6 +44,8 @@ export type GrowthState = {
   idleDays: number;
   milestones: string[];
   nextMilestone: { axis: string; label: string; remaining: number } | null;
+  // 숲 장식 — 요즘 상태. 축마다 지금 해당하는 가장 높은 단계 하나(ORNAMENT_CATALOG 키).
+  ornaments: string[];
   // 윈백(불씨 되살리기): 지금 되살릴 수 있는 잔불(유예창 진행중)과 복구 토큰 잔액.
   ember: Ember | null;
   restoreTokens: number;
@@ -287,6 +289,67 @@ const MILESTONES = {
   ] as Array<[number, string]>,
 };
 
+// ── 숲 장식: 요즘 상태 ──
+// 나무 단계와 레벨이 쌓아온 것을 보여주므로 장식은 지금 상태만 보여준다. 축마다
+// 해당하는 가장 높은 단계 하나만 달아(최대 4개) 나무끼리 구분되게 한다. 한 번 딴
+// 누적 기록은 위 MILESTONES가 그대로 보관한다.
+// 단계는 2026-10 팀 분포로 맞춘 초기값이다. 한 단계에 몰리면 이 블록만 고친다.
+export const ORNAMENT_WINDOW_DAYS = 30;
+const ORNAMENTS = {
+  streak: [
+    [3, "🌸"], [7, "🦋"], [14, "🐝"], [30, "🌈"], [60, "⭐"], [100, "☄️"],
+  ] as Array<[number, string]>,
+  recent_days: [
+    [10, "💧"], [15, "🐦"], [20, "🐿️"], [25, "🦌"], [30, "🦉"],
+  ] as Array<[number, string]>,
+  recent_bonus: [
+    [5, "🌤️"], [10, "☀️"], [15, "🌞"], [25, "🌟"],
+  ] as Array<[number, string]>,
+  recent_tools: [
+    [2, "🍄"], [3, "🌾"], [4, "🌻"], [5, "🌺"], [6, "🌴"],
+  ] as Array<[number, string]>,
+};
+export type OrnamentAxis = keyof typeof ORNAMENTS;
+
+const ORNAMENT_LABEL: Record<OrnamentAxis, (n: number) => string> = {
+  streak: (n) => `${n}일 연속 중`,
+  recent_days: (n) => `활동 ${n}일`,
+  recent_bonus: (n) => `사용 보너스 ${n}일`,
+  recent_tools: (n) => `도구 ${n}종`,
+};
+
+export const ORNAMENT_CATALOG = (Object.keys(ORNAMENTS) as OrnamentAxis[]).flatMap((axis) =>
+  ORNAMENTS[axis].map(([threshold, emoji]) => ({
+    key: `${axis}_${threshold}`,
+    axis,
+    emoji,
+    label: ORNAMENT_LABEL[axis](threshold),
+    threshold,
+  })),
+);
+
+// 축별로 count가 닿은 가장 높은 단계의 키. 첫 단계에 못 미친 축은 장식이 없다.
+function collectOrnaments(counts: Record<OrnamentAxis, number>): string[] {
+  const out: string[] = [];
+  for (const axis of Object.keys(ORNAMENTS) as OrnamentAxis[]) {
+    let top: number | null = null;
+    for (const [th] of ORNAMENTS[axis]) if (counts[axis] >= th) top = th;
+    if (top !== null) out.push(`${axis}_${top}`);
+  }
+  return out;
+}
+
+// today부터 거슬러 올라간 최근 size일. 아직 확인되지 않은 날(보고서 대기)은 건너뛰어
+// 창에 넣지 않는다 — 넣으면 보고서로만 잡히는 사람은 만점 단계에 닿을 수 없다.
+function recentWindow(today: string, size: number, unconfirmed?: ReadonlySet<string>): Set<string> {
+  const out = new Set<string>();
+  // unconfirmed는 유한하므로 반드시 끝난다. 상한은 이상 입력 방어.
+  for (let d = today, guard = 0; out.size < size && guard < size + 400; d = addDays(d, -1), guard++) {
+    if (!unconfirmed?.has(d)) out.add(d);
+  }
+  return out;
+}
+
 // --- 표시용 카탈로그 (UI 전용 파생 — 엔진 로직과 단일 소스) ---
 
 const AXIS_LABEL: Record<string, (n: number) => string> = {
@@ -353,7 +416,7 @@ export function computeGrowth(
     gp: 0, level: 0, stage: "dormant", stageEmoji: "🌰", stageLabel: "부화 전 씨앗",
     toNextLevel: 0, toNextStage: 0, activeDays: 0, streakDays: 0, bestStreak: 0,
     streakMultiplier: 1.0, efficiencyBonusToday: 0, vitality: "dozing", idleDays: 0,
-    milestones: [], nextMilestone: null, ember: null, restoreTokens: 0,
+    milestones: [], nextMilestone: null, ornaments: [], ember: null, restoreTokens: 0,
   };
 
   // 팀 epoch 이후 활동일만. 활동이 없으면(위저드 완료와 무관) 휴면.
@@ -412,6 +475,15 @@ export function computeGrowth(
   }
   const vitality = idleDays <= 0 ? "lively" : idleDays >= 3 ? "dozing" : "neutral";
 
+  const window = recentWindow(today, ORNAMENT_WINDOW_DAYS, unconfirmed);
+  const recent = eligible.filter((d) => window.has(d.date));
+  const ornaments = collectOrnaments({
+    streak: streakDays,
+    recent_days: recent.length,
+    recent_bonus: recent.filter((d) => usageBonus(d) >= 3).length,
+    recent_tools: new Set(recent.flatMap((d) => d.tools)).size,
+  });
+
   return {
     gp, level, stage, stageEmoji, stageLabel,
     toNextLevel,
@@ -421,7 +493,7 @@ export function computeGrowth(
     streakMultiplier: streakMultiplier(streakDays),
     efficiencyBonusToday: usageBonus(eligible[eligible.length - 1]), // 필드명은 API 호환용 유지
     vitality, idleDays: Math.max(0, idleDays),
-    milestones: unlocked, nextMilestone: next,
+    milestones: unlocked, nextMilestone: next, ornaments,
     ember: revival.ember, restoreTokens: revival.restoreTokens,
   };
 }
