@@ -1,10 +1,10 @@
 import Link from "next/link";
-import { STAGE_LEGEND, milestoneGroups, STATE_LEGEND } from "@/lib/forest-symbols";
+import { STAGE_LEGEND, ornamentGroups, ORNAMENT_NOTE, STATE_LEGEND } from "@/lib/forest-symbols";
 
 // 홈 숲 아래 컴팩트 범례. 네이티브 <details>(클라이언트 JS 불필요), 기본 접힘.
 // 이모지는 정보이므로 인접 텍스트 라벨 동반(호버 비의존·모바일 OK).
 export default function SymbolLegend() {
-  const groups = milestoneGroups();
+  const groups = ornamentGroups();
   const rowCls = "flex flex-wrap gap-x-3 gap-y-1 text-[var(--text-secondary)]";
   const headCls = "mb-1 text-xs font-semibold text-[var(--accent-strong)]";
   return (
@@ -23,10 +23,11 @@ export default function SymbolLegend() {
             ))}
           </div>
         </div>
+        <p className="text-xs text-[var(--text-muted)]">{ORNAMENT_NOTE}</p>
         {groups.map((g) => (
           <div key={g.axis}>
             <div className={headCls}>
-              {g.axisLabel}{g.axis === "streak" ? " · 나무 성장 기록" : ""}{" "}
+              {g.axisLabel}{" "}
               <span className="font-normal text-[var(--text-muted)]">— {g.meaning}</span>
             </div>
             <div className={rowCls}>

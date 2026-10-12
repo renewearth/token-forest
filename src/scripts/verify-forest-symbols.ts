@@ -1,20 +1,20 @@
-import { milestoneGroups, STAGE_LEGEND, STATE_LEGEND } from "../lib/forest-symbols";
-import { STREAK_CATALOG, MILESTONE_CATALOG } from "../lib/growth";
+import { ornamentGroups, STAGE_LEGEND, STATE_LEGEND } from "../lib/forest-symbols";
+import { STREAK_CATALOG, ORNAMENT_CATALOG } from "../lib/growth";
 
 function assert(cond: boolean, msg: string) {
   if (!cond) { console.error("FAIL:", msg); process.exit(1); }
   console.log("ok:", msg);
 }
 
-const groups = milestoneGroups();
+const groups = ornamentGroups();
 assert(groups.length === 4, `4축 (got ${groups.length})`);
-assert(groups.map((g) => g.axis).join(",") === "streak,active_days,efficiency,tools", "축 순서");
+assert(groups.map((g) => g.axis).join(",") === "streak,recent_days,recent_bonus,recent_tools", "축 순서");
 const counts = groups.map((g) => g.tiers.length);
-assert(JSON.stringify(counts) === JSON.stringify([5, 5, 2, 3]), `티어 개수 5·5·2·3 (got ${counts})`);
+assert(JSON.stringify(counts) === JSON.stringify([6, 5, 4, 5]), `티어 개수 6·5·4·5 (got ${counts})`);
 for (const g of groups) {
   assert(g.axisLabel.length > 0 && g.meaning.length > 0, `${g.axis} 라벨·의미 존재`);
   for (const t of g.tiers) {
-    const cat = MILESTONE_CATALOG.find((m) => m.emoji === t.emoji);
+    const cat = ORNAMENT_CATALOG.find((m) => m.emoji === t.emoji);
     assert(!!cat && cat.threshold === t.threshold, `${t.emoji} threshold 정합`);
   }
 }

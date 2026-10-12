@@ -21,7 +21,7 @@ export default async function GrowthCard({ memberId }: { memberId: string }) {
         <p className="text-[var(--text-muted)]">게임 규칙에 따른 표시이며 업무 성과를 평가하지 않습니다.</p>
         <div className="flex items-center gap-4"><span aria-hidden className="text-5xl">{g.stageEmoji}</span><p>{g.stageLabel} · Lv{g.level} · {g.gp} GP</p></div>
         <p>기록된 활동 {g.activeDays}일 · 최고 연속 기록 {g.bestStreak}일 · 최근 사용 보너스 +{g.efficiencyBonusToday}</p>
-        <div className="flex flex-wrap gap-2">{MILESTONE_CATALOG.filter((m) => earned.has(m.key)).map((m) => <span key={m.key} className="rounded bg-[var(--surface-2)] px-2 py-1">{m.emoji} {m.label}</span>)}</div>
+        <div className="flex flex-wrap gap-2">{MILESTONE_CATALOG.filter((m) => earned.has(m.key)).map((m) => <span key={m.key} className="rounded bg-[var(--surface-2)] px-2 py-1">{m.label}</span>)}</div>
         <details className="text-xs text-[var(--text-secondary)]"><summary className="cursor-pointer">게임 규칙</summary>
           <div className="mt-2 space-y-2">
             <p>AI를 쓴 날마다 10 GP에 연속 기록 배수를 적용하고 사용 보너스(최대 5)를 더합니다. 모든 수집 도구와 Claude 일별 보고서의 사용을 합쳐서 봅니다.</p>

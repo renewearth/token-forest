@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { STAGE_LEGEND, milestoneGroups, STATE_LEGEND } from "@/lib/forest-symbols";
+import { STAGE_LEGEND, ornamentGroups, ORNAMENT_NOTE, STATE_LEGEND } from "@/lib/forest-symbols";
 import { PageHeader, Card } from "@/app/_components/ui";
 
 export default function GuidePage() {
@@ -8,7 +8,8 @@ export default function GuidePage() {
     <Card title="팀의 숲"><p>기존 성장형 숲을 보여줍니다. 나무 단계·레벨·연속 기록·장식은 게임 규칙에 따라 표시되며, 배경과 동물은 시간대에 따라 달라집니다. 이름을 누르면 구성원별 사용 흐름을 볼 수 있습니다.</p></Card>
     <Card title="숲의 기호"><div className="space-y-3 text-sm">
       <div><h3 className="mb-1 font-medium">나무 단계</h3><div className="flex flex-wrap gap-2">{STAGE_LEGEND.map(s => <span key={s.label}>{s.emoji} {s.label}{s.threshold !== undefined ? ` · ${s.threshold} GP 이상` : " · 기록 전"}</span>)}</div></div>
-      {milestoneGroups().map(g => <div key={g.axis}><h3 className="mb-1 font-medium">{g.axisLabel} — {g.meaning}</h3><div className="flex flex-wrap gap-2">{g.tiers.map(t => <span key={t.emoji}>{t.emoji} {t.label}</span>)}</div></div>)}
+      <p>{ORNAMENT_NOTE}</p>
+      {ornamentGroups().map(g => <div key={g.axis}><h3 className="mb-1 font-medium">{g.axisLabel} — {g.meaning}</h3><div className="flex flex-wrap gap-2">{g.tiers.map(t => <span key={t.emoji}>{t.emoji} {t.label}</span>)}</div></div>)}
       <div><h3 className="mb-1 font-medium">상태</h3>{STATE_LEGEND.map(s => <p key={s.emoji}>{s.emoji} {s.label} — {s.meaning}</p>)}</div>
       <p>게임 표시는 업무 성과나 숙련도 평가가 아닙니다. 수집되지 않은 기록은 게임에도 반영되지 않을 수 있습니다.</p>
     </div></Card>
