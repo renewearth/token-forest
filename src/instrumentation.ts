@@ -13,7 +13,6 @@ export async function register() {
 
   const cron = (await import("node-cron")).default;
   const { runSyncExclusive } = await import("@/scripts/sync");
-  const { sendWeeklyReport } = await import("@/lib/slack");
 
   // Poll central APIs every hour, on the hour. Incremental with lookback, so
   // each run only re-fetches the last few days. Skips itself if a manual
@@ -25,18 +24,9 @@ export async function register() {
     );
   });
 
-  // Weekly Slack report, Monday 09:30 KST.
-  cron.schedule(
-    "30 9 * * 1",
-    () => {
-      console.log("[cron] sending weekly Slack report");
-      sendWeeklyReport().catch((err) =>
-        console.error("[cron] slack report failed:", err),
-      );
-    },
-    { timezone: "Asia/Seoul" },
-  );
+  // The weekly Slack report is no longer scheduled (stopped 2026-10-13). The
+  // dashboard covers it; `pnpm report` still sends one by hand.
 
-  console.log("[cron] schedulers registered (sync hourly, slack Mon 09:30 KST)");
+  console.log("[cron] schedulers registered (sync hourly)");
   }
 }
