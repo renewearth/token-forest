@@ -13,11 +13,10 @@
 //
 // Same { tool, aggregate } contract as codex.mjs / gemini.mjs.
 
-import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { createInterface } from "node:readline";
+import { readLines } from "../lib/read-lines.mjs";
 import { kstDate, kstHour } from "../lib/kst.mjs";
 import { deviceTag } from "../lib/device-id.mjs";
 import { addMetric, bucketEvents, emptyMetrics, makeHealth } from "../lib/sessions.mjs";
@@ -163,10 +162,7 @@ export async function aggregate({ sinceDate, machineId = "" } = {}) {
 
   const lines = [];
   try {
-    const rl = createInterface({
-      input: createReadStream(file, { encoding: "utf8" }),
-      crlfDelay: Infinity,
-    });
+    const rl = readLines(file);
     stats.files = 1;
     for await (const line of rl) {
       if (!line) continue;
