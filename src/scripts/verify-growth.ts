@@ -1,4 +1,4 @@
-import { computeGrowth, diversityBonus, GP_RULES, streakEndingAt, usageBonus, volumeBonus, volumeStep } from "../lib/growth";
+import { computeGrowth, diversityBonus, GP_RULES, levelFor, levelMinGp, streakEndingAt, usageBonus, volumeBonus, volumeStep } from "../lib/growth";
 import type { GrowthDay } from "../lib/growth";
 
 function assert(cond: boolean, msg: string) {
@@ -17,7 +17,8 @@ assert(usageBonus(days[0]) === 4, "사용 보너스 07-18 = 4 (사용량 3 + 다
 // GP: (10×1.0+4)+(10×1.0+4)+(round(10×1.2)+4)=14+14+16 = 44.
 const g = computeGrowth(days, "2026-07-18", "2026-07-23");
 assert(g.gp === 44, `GP=44 (got ${g.gp})`);
-assert(g.level === 1, `level=1 (got ${g.level})`);
+assert(g.level === 3, `level=3 — 44 GP는 Lv3(40)과 Lv4(90) 사이 (got ${g.level})`);
+assert(g.toNextLevel === 46, `Lv4까지 46 (got ${g.toNextLevel})`);
 assert(g.stage === "germinated" && g.stageLabel === "(씨)발아", "stage=(씨)발아");
 assert(g.toNextStage === 56, `새싹까지 56 (got ${g.toNextStage})`);
 assert(g.bestStreak === 3, `bestStreak=3 (got ${g.bestStreak})`);
@@ -105,6 +106,18 @@ const broken = computeGrowth([...base, { date: "2026-09-10", tools: ["claude_cod
 assert(broken.streakDays === 1 && broken.bestStreak === 3, `확인된 결석 6일 → 연속 1 (got ${broken.streakDays})`);
 // 확인 중인 날은 연속 길이에 더해지지 않는다(멈춰 둘 뿐).
 assert(streakEndingAt(new Set(["2026-09-01", "2026-09-03"]), "2026-09-03", "2026-09-01", new Set(["2026-09-02"])) === 2, "확인 중인 날은 세지 않음");
+
+// --- 레벨: 필요한 GP = 10 × (L−1)², 올라갈수록 간격이 넓어진다 ---
+assert(JSON.stringify([1, 2, 3, 4, 5, 10, 16, 22].map(levelMinGp)) === JSON.stringify([0, 10, 40, 90, 160, 810, 2250, 4410]), "레벨별 필요 GP");
+for (const [gp, lv] of [[0, 1], [9, 1], [10, 2], [39, 2], [40, 3], [809, 9], [810, 10], [2249, 15], [2250, 16], [4500, 22]] as Array<[number, number]>) {
+  assert(levelFor(gp) === lv, `GP ${gp} → Lv${lv} (got ${levelFor(gp)})`);
+}
+for (let gp = 0; gp <= 20000; gp += 7) {
+  const lv = levelFor(gp);
+  if (!(levelMinGp(lv) <= gp && gp < levelMinGp(lv + 1))) { console.error("FAIL: 레벨 경계 불일치", gp, lv); process.exit(1); }
+}
+console.log("ok: 0~20000 GP 전 구간에서 레벨 경계 일치");
+assert(levelMinGp(3) - levelMinGp(2) < levelMinGp(17) - levelMinGp(16), "뒤로 갈수록 다음 레벨까지가 멀다");
 
 // --- 숲 장식: 요즘 상태 (축마다 가장 높은 단계 하나) ---
 // 위 픽스처: 3일 활동 뒤 3일 쉼 → 연속 0, 최근 활동 3일, 보너스 3일, 도구 2종.
