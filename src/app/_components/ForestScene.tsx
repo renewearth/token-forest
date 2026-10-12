@@ -55,16 +55,14 @@ const BAND_HILL: Record<TimeBand, string> = {
 
 export default async function ForestScene({ band, activity }: { band?: TimeBand; activity: ActivityCalendarData }) {
   await connectDb();
-  const members = await Member.find(VISIBLE_MEMBER, { name: 1, onboardedAt: 1 }).lean();
+  const members = await Member.find(VISIBLE_MEMBER, { name: 1 }).lean();
   if (members.length === 0) return <EmptyState message="등록된 구성원이 없습니다." />;
   const today = todayKst();
   const unconfirmed = await getUnconfirmedGrowthDates(today);
   const trees = await Promise.all(
     members.map(async (m) => {
-      const onboarded = m.onboardedAt
-        ? new Date(m.onboardedAt).toISOString().slice(0, 10)
-        : null;
-      const days = await getGrowthDays(String(m._id), onboarded ?? "1970-01-01");
+      // 가입일이 아니라 팀 시작일부터 센다 — 모두 같은 날을 기준으로 한다.
+      const days = await getGrowthDays(String(m._id), teamEpoch());
       return { id: String(m._id), name: m.name, g: computeGrowth(days, teamEpoch(), today, undefined, unconfirmed) };
     }),
   );

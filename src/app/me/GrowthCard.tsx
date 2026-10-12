@@ -10,9 +10,8 @@ export default async function GrowthCard({ memberId }: { memberId: string }) {
   await connectDb();
   const member = await Member.findById(memberId).lean();
   if (!member) return null;
-  const from = member.onboardedAt ? new Date(member.onboardedAt).toISOString().slice(0, 10) : "1970-01-01";
   const today = todayKst();
-  const [days, unconfirmed] = await Promise.all([getGrowthDays(memberId, from), getUnconfirmedGrowthDates(today)]);
+  const [days, unconfirmed] = await Promise.all([getGrowthDays(memberId, teamEpoch()), getUnconfirmedGrowthDates(today)]);
   const g = computeGrowth(days, teamEpoch(), today, undefined, unconfirmed);
   const earned = new Set(g.milestones);
   return (
